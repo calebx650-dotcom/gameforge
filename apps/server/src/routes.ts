@@ -2,6 +2,7 @@ import { Router } from "express";
 import type { MemoryCategory } from "@gameforge/memory";
 import { createProvider } from "@gameforge/llm";
 import { summarizeProjectContext } from "@gameforge/project";
+import { gitStatusTool, gitDiffTool, gitLogTool, restoreCheckpoint, InvalidCommitReferenceError } from "@gameforge/tools";
 import type { ProjectManager } from "./project-manager.js";
 
 function serialize(session: ReturnType<ProjectManager["get"]>) {
@@ -89,6 +90,68 @@ export function createRouter(projects: ProjectManager): Router {
     }
     session.memory.remove(Number(req.params.entryId));
     res.status(204).end();
+  });
+
+  router.get("/projects/:id/git/status", async (req, res) => {
+    const session = projects.get(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    try {
+      res.json(await gitStatusTool(session.guard));
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.get("/projects/:id/git/diff", async (req, res) => {
+    const session = projects.get(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    try {
+      const path = typeof req.query.path === "string" ? req.query.path : undefined;
+      res.json({ diff: await gitDiffTool(session.guard, path) });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.get("/projects/:id/git/log", async (req, res) => {
+    const session = projects.get(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    const limit = req.query.limit ? Number(req.query.limit) : undefined;
+    res.json(await gitLogTool(session.guard, limit));
+  });
+
+  // Restoring a checkpoint is a hard reset — deliberately reachable only
+  // via this direct REST call (a user clicking "Restore" in the UI), never
+  // through the agent's tool set. See git-tools.ts's restoreCheckpoint doc.
+  router.post("/projects/:id/git/restore", async (req, res) => {
+    const session = projects.get(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    const hash = req.body?.hash;
+    if (typeof hash !== "string" || !hash) {
+      res.status(400).json({ error: "Body must include a 'hash' string." });
+      return;
+    }
+    try {
+      res.json(await restoreCheckpoint(session.guard, hash));
+    } catch (err) {
+      if (err instanceof InvalidCommitReferenceError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      res.status(500).json({ error: (err as Error).message });
+    }
   });
 
   router.post("/providers/models", async (req, res) => {

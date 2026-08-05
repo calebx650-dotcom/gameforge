@@ -47,7 +47,7 @@ npx vitest run packages/tools   # scope to one package
 npx vitest watch                # watch mode while iterating
 ```
 
-Latest count: 173 tests across 43 files, all passing, including an automated
+Latest count: 194 tests across 44 files, all passing, including an automated
 end-to-end smoke test (`apps/server/src/e2e.test.ts`) that drives the full
 "open project -> list models -> chat -> read file -> edit file -> run
 command -> report" loop against a fake Ollama server, with no external

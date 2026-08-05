@@ -227,3 +227,36 @@ button:disabled {
   font-size: 9px;
   margin-right: 6px;
 }
+
+.git-diff {
+  max-height: 160px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  font-size: 10px;
+}
+
+.git-log {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.git-log li {
+  font-size: 11px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+.git-log-message {
+  margin-bottom: 2px;
+}
+.git-log-meta {
+  color: var(--muted);
+  font-size: 10px;
+  margin-bottom: 4px;
+}

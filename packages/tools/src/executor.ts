@@ -14,6 +14,7 @@ import { runCommandTool } from "./exec-tool.js";
 import { decidePermission } from "./permissions.js";
 import type { WorkspaceGuard } from "./workspace.js";
 import { dispatchGenerationTool, isGenerationTool, type GenerationProviders } from "./generation-tools.js";
+import { gitStatusTool, gitDiffTool, gitLogTool, gitBranchTool, gitCommitTool } from "./git-tools.js";
 
 export type ApprovalRequest = (call: ToolCall, reason: string) => Promise<boolean>;
 
@@ -40,6 +41,7 @@ export class ToolExecutor {
     const decision = decidePermission({
       mode,
       category: definition.category,
+      mutating: definition.mutating,
       dangerous,
       costsMoney: definition.costsMoney,
     });
@@ -96,6 +98,16 @@ export class ToolExecutor {
         const result = await runCommandTool(this.guard, String(args.command), args.timeoutMs as number | undefined);
         return JSON.stringify(result);
       }
+      case "git_status":
+        return JSON.stringify(await gitStatusTool(this.guard));
+      case "git_diff":
+        return gitDiffTool(this.guard, args.path as string | undefined);
+      case "git_log":
+        return JSON.stringify(await gitLogTool(this.guard, args.limit as number | undefined));
+      case "git_branch":
+        return JSON.stringify(await gitBranchTool(this.guard));
+      case "git_commit":
+        return JSON.stringify(await gitCommitTool(this.guard, String(args.message), args.paths as string[] | undefined));
       default:
         if (isGenerationTool(call.name)) {
           return dispatchGenerationTool(call.name, args, this.generationProviders);

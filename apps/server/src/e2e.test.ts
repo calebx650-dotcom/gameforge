@@ -4,6 +4,8 @@ import type { AddressInfo } from "node:net";
 import { mkdtemp, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import request from "supertest";
 import WebSocket from "ws";
 import { createServer } from "node:http";
@@ -141,5 +143,58 @@ describe("GameForge end-to-end smoke test", () => {
 
     const finalContent = await readFile(join(projectRoot, "hello.txt"), "utf-8");
     expect(finalContent).toBe("hello from GameForge world\n");
+  });
+
+  it("auto-commits a checkpoint before a build-mode run when the project is a dirty git repo", async () => {
+    const execFileAsync = promisify(execFile);
+    const httpBase = `http://localhost:${gfPort}`;
+
+    const gitProjectRoot = await mkdtemp(join(tmpdir(), "gf-e2e-git-"));
+    await writeFile(join(gitProjectRoot, "hello.txt"), "hello world\n");
+    await execFileAsync("git", ["init"], { cwd: gitProjectRoot });
+    await execFileAsync("git", ["config", "user.email", "test@example.com"], { cwd: gitProjectRoot });
+    await execFileAsync("git", ["config", "user.name", "Test"], { cwd: gitProjectRoot });
+    await execFileAsync("git", ["add", "-A"], { cwd: gitProjectRoot });
+    await execFileAsync("git", ["commit", "-m", "initial"], { cwd: gitProjectRoot });
+    await writeFile(join(gitProjectRoot, "dirty.txt"), "uncommitted work\n"); // dirties the tree
+
+    const openRes = await request(httpBase).post("/api/projects").send({ path: gitProjectRoot });
+    const projectId = openRes.body.id;
+
+    const logSummaries = await new Promise<string[]>((resolve, reject) => {
+      const ws = new WebSocket(`ws://localhost:${gfPort}/ws/chat`);
+      const summaries: string[] = [];
+      const timeout = setTimeout(() => reject(new Error("checkpoint e2e timed out")), 10_000);
+
+      ws.on("open", () => {
+        ws.send(
+          JSON.stringify({
+            type: "chat",
+            projectId,
+            mode: "build",
+            providerSettings: { provider: "ollama", model: "llama3.1:8b", baseUrl: `http://127.0.0.1:${fakeOllamaPort}` },
+            message: "Please greet the project, then verify the shell works.",
+          }),
+        );
+      });
+
+      ws.on("message", (raw) => {
+        const msg = JSON.parse(raw.toString());
+        if (msg.type === "log") summaries.push(msg.entry.summary);
+        else if (msg.type === "result") {
+          clearTimeout(timeout);
+          ws.close();
+          resolve(summaries);
+        } else if (msg.type === "error") {
+          clearTimeout(timeout);
+          reject(new Error(msg.message));
+        }
+      });
+    });
+
+    expect(logSummaries.some((s) => s.includes("Checkpoint committed"))).toBe(true);
+
+    const { stdout } = await execFileAsync("git", ["log", "--oneline"], { cwd: gitProjectRoot });
+    expect(stdout).toMatch(/GameForge checkpoint/);
   });
 });

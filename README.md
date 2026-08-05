@@ -36,7 +36,12 @@ just a stated goal. Unity integration itself is still ahead — see
    Controller/humanoid avatar mapping/ragdoll config, an HLSL shader, or a
    themed post-processing profile — entirely locally, for free, no vendor
    needed.
-8. Everything is visible in the Tool Activity panel as it happens.
+8. The agent can inspect git status/diff/log/branches (read-only, always
+   available) and commit changes (mode-gated). Before every build/autonomous
+   run on a git-backed project, GameForge auto-commits a checkpoint of any
+   dirty working tree, so a bad run always has a fallback — the desktop UI's
+   Git panel shows status, diffs, and a one-click "Restore" per checkpoint.
+9. Everything is visible in the Tool Activity panel as it happens.
 
 ## Repository layout
 
@@ -73,7 +78,7 @@ Requirements: Node.js 22+ (for the built-in `node:sqlite` module), npm.
 ```bash
 npm install
 npm run build      # builds all packages
-npm test           # runs the full test suite (173 tests across 43 files, latest count)
+npm test           # runs the full test suite (194 tests across 44 files, latest count)
 ```
 
 ## Running it

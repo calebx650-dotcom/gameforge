@@ -30,6 +30,38 @@ export function listModels(settings: Pick<ProviderSettings, "provider" | "baseUr
   return jsonFetch("/api/providers/models", { method: "POST", body: JSON.stringify(settings) });
 }
 
+export interface GitStatus {
+  isRepo: boolean;
+  branch?: string;
+  staged: string[];
+  unstaged: string[];
+  untracked: string[];
+}
+
+export interface GitLogEntry {
+  hash: string;
+  author: string;
+  date: string;
+  message: string;
+}
+
+export function getGitStatus(projectId: string): Promise<GitStatus> {
+  return jsonFetch(`/api/projects/${projectId}/git/status`);
+}
+
+export function getGitDiff(projectId: string, path?: string): Promise<{ diff: string }> {
+  const query = path ? `?path=${encodeURIComponent(path)}` : "";
+  return jsonFetch(`/api/projects/${projectId}/git/diff${query}`);
+}
+
+export function getGitLog(projectId: string, limit = 20): Promise<GitLogEntry[]> {
+  return jsonFetch(`/api/projects/${projectId}/git/log?limit=${limit}`);
+}
+
+export function restoreGitCheckpoint(projectId: string, hash: string): Promise<{ restoredTo: string }> {
+  return jsonFetch(`/api/projects/${projectId}/git/restore`, { method: "POST", body: JSON.stringify({ hash }) });
+}
+
 export interface ChatSocketCallbacks {
   onLog: (entry: OperationLogEntry) => void;
   onApprovalRequest: (requestId: string, toolCall: ToolCall, reason: string) => void;

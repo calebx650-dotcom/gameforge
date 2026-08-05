@@ -171,6 +171,34 @@ is decided per chat session, not per tool call — `apps/server`'s
 tool-call arguments the model sees and out of the operation log, the same
 way the main LLM's API key never enters the system prompt.
 
+## Git integration (`packages/tools/src/git-tools.ts`)
+
+Five tools, split by mutation the same way as everything else: `git_status`,
+`git_diff`, `git_log`, `git_branch` are read-only (`ToolDefinition.mutating:
+false`, always allowed); `git_commit` mutates history and follows the same
+`ask`-deny / `assist`-approve / `build`+`autonomous`-allow gating as any
+other write. This is what the `mutating` field on `ToolDefinition` was added
+for — `decidePermission()`'s default (`mutating = category !== "read"`)
+would otherwise treat every tool in the `"git"` category as mutating just
+because the category isn't literally `"read"`.
+
+Two more pieces exist outside the agent's tool set entirely, both in
+`git-tools.ts` but never routed through `ToolExecutor`:
+
+- `maybeCreateCheckpoint(guard, mode, label)` runs automatically at the
+  start of every `build`/`autonomous` chat request (`apps/server`'s
+  `chat-socket.ts` calls it before constructing the `Agent`), auto-committing
+  a dirty working tree so the run has a rollback point. It's a no-op on a
+  clean tree or a non-repo, and it isn't a tool the model calls — the server
+  runs it unconditionally, before the model sees the request.
+- `restoreCheckpoint(guard, hash)` performs `git reset --hard` after
+  validating the hash resolves to a real commit. It's reachable only via
+  `apps/server`'s `POST /projects/:id/git/restore` REST endpoint, called by
+  `apps/desktop`'s Git panel "Restore" button — deliberately not exposed as
+  an agent tool at all, the same treatment as the dangerous-command list:
+  a hard reset is destructive enough that it shouldn't be one model decision
+  away, approved or not.
+
 ## Agent loop
 
 `packages/agent/src/agent.ts`: `Agent.run(conversation)` repeats, up to

@@ -3,7 +3,7 @@ import type { WebSocket } from "ws";
 import type { AgentMode, ChatMessage, ProviderSettings, ToolCall } from "@gameforge/shared";
 import { createProvider } from "@gameforge/llm";
 import { Agent } from "@gameforge/agent";
-import { ToolExecutor, type GenerationProviders } from "@gameforge/tools";
+import { ToolExecutor, maybeCreateCheckpoint, type GenerationProviders } from "@gameforge/tools";
 import { summarizeProjectContext } from "@gameforge/project";
 import { createText3DProvider, createPBRMaterialProvider, type AssetGenerationSettings } from "@gameforge/assets3d";
 import { createAutoRigProvider, createMotionProvider, type RiggingSettings } from "@gameforge/rigging";
@@ -98,6 +98,11 @@ one was approved implicitly.
 You also have purely local, free tools that need no vendor at all: procedural level layout, boss combat design
 (behavior tree + combo graph), ProBuilder graybox geometry export, Unity Animator Controller / humanoid avatar
 mapping / ragdoll config generation, and HLSL shader / post-processing profile synthesis.
+You have git tools: git_status, git_diff, git_log, and git_branch are read-only and always available; git_commit
+modifies history and is gated by mode like any other write. If the project is a git repository and in build or
+autonomous mode, a checkpoint commit is made automatically before you start working, so the user can always recover
+the pre-change state — you don't need to create that checkpoint yourself, but you may use git_commit to save your
+own progress at meaningful points.
 Stay within the project workspace. Explain what you changed and why. Ask before doing anything destructive.`;
 
 /**
@@ -146,6 +151,14 @@ export function handleChatConnection(socket: WebSocket, projects: ProjectManager
     }
 
     activeAbortController = new AbortController();
+
+    const checkpoint = await maybeCreateCheckpoint(session.guard, request.mode, request.message.slice(0, 72));
+    if (checkpoint.created) {
+      send(socket, {
+        type: "log",
+        entry: { timestamp: Date.now(), kind: "message", summary: `Checkpoint committed (${checkpoint.hash?.slice(0, 8)}) before this run.` },
+      });
+    }
 
     const executor = new ToolExecutor(
       session.guard,

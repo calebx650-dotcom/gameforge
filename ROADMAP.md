@@ -12,11 +12,18 @@ should be working and tested before the next starts.
 - [x] **Phase 4** — Filesystem/project tools (`read_file`, `edit_file`,
       `create_file`, `delete_file`, `create_directory`, `search_project`,
       `list_directory`, `run_command`).
-- [ ] **Phase 5** — Git integration (`git_status`, `git_diff`, `git_log`,
-      `git_commit`, `git_branch` as agent tools; pre-modification checkpoint
-      commits; diff/revert/restore UI). The project scanner already reports
-      git branch + dirty-file count today; the tool layer and checkpoint/
-      rollback UX are not built yet.
+- [x] **Phase 5** — Git integration. `git_status`/`git_diff`/`git_log`/`git_branch`
+      (read-only, always allowed) and `git_commit` (mutating, mode-gated) are
+      real agent tools in `packages/tools/src/git-tools.ts`. Before every
+      build/autonomous-mode run, `maybeCreateCheckpoint()` auto-commits a
+      dirty working tree (no-ops on a clean tree or a non-git project) so a
+      bad run always has a known-good state to fall back to — wired into
+      `apps/server`'s chat handler, visible in the Tool Activity log.
+      `apps/desktop`'s Git panel shows branch/dirty-file status, a diff
+      viewer, and a checkpoint list with a "Restore" button
+      (`git reset --hard`) — restoring is reachable only through that direct
+      REST call, never through the agent's tool set, since a hard reset is
+      destructive and shouldn't be one model decision away.
 - [x] **Phase 6** — Project memory/context system (`packages/memory`,
       SQLite via `node:sqlite`; compact project context summary via
       `packages/project`).
@@ -42,9 +49,13 @@ should be working and tested before the next starts.
       still missing: an actual capture *source* — there's no Unity bridge
       yet to record gameplay from, so `packages/vision` is a tested,
       ready-to-wire library, not yet an agent tool (see UNITY_BRIDGE.md).
-- [ ] **Phase 11** — Autonomous development loop (iteration/time/filesystem
-      limits beyond the current iteration cap; cancellation is implemented
-      via `AbortSignal`; rollback support depends on Phase 5's checkpoints).
+- [~] **Phase 11** — Autonomous development loop. Iteration cap and
+      cancellation (`AbortSignal`) were already in place; rollback now has
+      its foundation via Phase 5's checkpoint commits and the restore
+      endpoint. Still missing: max command execution *time* and filesystem
+      restrictions beyond the current per-command timeout and
+      `WorkspaceGuard` root restriction (i.e., finer-grained limits within
+      a single autonomous run, not just at the tool-call level).
 
 ## Generative content pipelines (pulled forward from later phases)
 

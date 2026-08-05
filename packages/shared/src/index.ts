@@ -56,6 +56,14 @@ export interface ToolDefinition {
    * reverting a git commit.
    */
   costsMoney?: boolean;
+  /**
+   * Overrides the default mutating/non-mutating inference (which is just
+   * `category !== "read"`). Needed for categories like "git" that mix
+   * read-only tools (git_status, git_diff, git_log, git_branch) with a
+   * mutating one (git_commit) — without this, every "git" tool would be
+   * treated as mutating just because its category isn't literally "read".
+   */
+  mutating?: boolean;
 }
 
 export type PermissionCategory = "read" | "write" | "execution" | "engine" | "git" | "generation";

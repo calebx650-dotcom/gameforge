@@ -152,4 +152,35 @@ describe("ToolExecutor", () => {
     expect(result.isError).toBe(true);
     expect(result.content).toMatch(/No text-to-3D provider configured/);
   });
+
+  it("allows git_status (a read-only git tool) without approval, even in ask mode", async () => {
+    const root = await makeProject();
+    let approvalCalled = false;
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => {
+      approvalCalled = true;
+      return true;
+    });
+    const result = await executor.execute({ id: "1", name: "git_status", arguments: {} }, "ask");
+    expect(approvalCalled).toBe(false);
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(result.content).isRepo).toBe(false);
+  });
+
+  it("denies git_commit (a mutating git tool) in ask mode and requires approval in assist mode", async () => {
+    const root = await makeProject();
+    const denyingExecutor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+    const denied = await denyingExecutor.execute({ id: "1", name: "git_commit", arguments: { message: "x" } }, "ask");
+    expect(denied.isError).toBe(true);
+    expect(denied.content).toMatch(/not permitted/);
+
+    let wasAskedForApproval = false;
+    const assistExecutor = new ToolExecutor(new WorkspaceGuard(root), async () => {
+      wasAskedForApproval = true;
+      return true;
+    });
+    // Not a git repo, so the commit itself fails, but approval must still be requested first.
+    const result = await assistExecutor.execute({ id: "1", name: "git_commit", arguments: { message: "x" } }, "assist");
+    expect(wasAskedForApproval).toBe(true);
+    expect(result.isError).toBe(true);
+  });
 });

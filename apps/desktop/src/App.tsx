@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import type { AgentMode, ModelInfo, OperationLogEntry, ToolCall } from "@gameforge/shared";
 import { ChatSocket, listModels, openProject, type ProjectSummary } from "./api.js";
+import { GitPanel } from "./GitPanel.js";
 
 const PROVIDERS = ["ollama", "openai", "openrouter", "anthropic", "openai-compatible"] as const;
 const MODES: AgentMode[] = ["ask", "assist", "build", "autonomous"];
@@ -34,6 +35,7 @@ export function App() {
   const [log, setLog] = useState<OperationLogEntry[]>([]);
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const [busy, setBusy] = useState(false);
+  const [gitRefreshSignal, setGitRefreshSignal] = useState(0);
 
   const socketRef = useRef<ChatSocket | null>(null);
 
@@ -81,11 +83,13 @@ export function App() {
           { role: "assistant", text: finalText || `(stopped: ${stoppedReason} after ${iterations} iteration(s))` },
         ]);
         setBusy(false);
+        setGitRefreshSignal((n) => n + 1);
         socket.close();
       },
       onError: (message) => {
         setChat((prev) => [...prev, { role: "activity", text: `Error: ${message}` }]);
         setBusy(false);
+        setGitRefreshSignal((n) => n + 1);
         socket.close();
       },
     });
@@ -162,6 +166,8 @@ export function App() {
               ))}
             </div>
           </section>
+
+          {project && <GitPanel projectId={project.id} refreshSignal={gitRefreshSignal} />}
         </aside>
 
         <main className="main">

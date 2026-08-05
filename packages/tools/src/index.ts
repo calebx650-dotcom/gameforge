@@ -9,3 +9,14 @@ export * from "./fs-tools.js";
 export * from "./exec-tool.js";
 export { dispatchGenerationTool, isGenerationTool, GENERATION_TOOL_NAMES } from "./generation-tools.js";
 export type { GenerationProviders } from "./generation-tools.js";
+export {
+  gitStatusTool,
+  gitDiffTool,
+  gitLogTool,
+  gitBranchTool,
+  gitCommitTool,
+  maybeCreateCheckpoint,
+  restoreCheckpoint,
+  InvalidCommitReferenceError,
+} from "./git-tools.js";
+export type { GitStatusResult, GitLogEntry, GitBranchResult, GitCommitResult, CheckpointResult } from "./git-tools.js";

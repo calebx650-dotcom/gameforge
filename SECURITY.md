@@ -123,11 +123,32 @@ workspace restriction, timeouts, and human approval.
 
 ## Git safety
 
-Not yet implemented in this phase: automatic pre-modification checkpoint
-commits, diff/revert UI, and checkpoint restore. The project scanner does
-report git status (branch, dirty file count) so the agent's system prompt at
-least reflects whether there's uncommitted work before it starts. See
-[ROADMAP.md](ROADMAP.md).
+Before every `build`/`autonomous`-mode agent run, `maybeCreateCheckpoint()`
+(`packages/tools/src/git-tools.ts`) auto-commits a dirty working tree with
+message `GameForge checkpoint: <first 72 chars of the prompt>` — a no-op if
+the tree is already clean or the project isn't a git repo, so it never
+creates empty commits or forces git onto a non-git project. This runs
+automatically; the agent doesn't decide whether it happens.
+
+The agent's own git tools are split by mutation:
+- `git_status`, `git_diff`, `git_log`, `git_branch` are read-only
+  (`mutating: false` on their `ToolDefinition`s) and always allowed,
+  matching how filesystem reads are always allowed.
+- `git_commit` mutates history and is gated like any other write:
+  denied in `ask`, requires approval in `assist`, allowed in
+  `build`/`autonomous`.
+
+**Restoring a checkpoint (`git reset --hard`) is deliberately not an agent
+tool at all.** It's exposed only via a direct REST endpoint
+(`POST /projects/:id/git/restore`) that the desktop UI's "Restore" button
+calls — there is no path from a model's tool call to a hard reset. This is
+the same reasoning as the dangerous-command list: some operations are risky
+enough that they shouldn't be one model decision (even an approved one)
+away, and a hard reset that discards uncommitted work since the checkpoint
+is one of them. The restore endpoint validates the given hash actually
+resolves to a real commit in the repo before running (`InvalidCommitReferenceError`
+on a malformed or nonexistent reference) — not a substitute for the
+approval gate above, just protection against restoring to a typo'd hash.
 
 ## Local model execution (Blender CLI, local HTTP inference servers)
 

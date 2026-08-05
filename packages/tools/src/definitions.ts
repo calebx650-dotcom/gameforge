@@ -92,6 +92,53 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: "git_status",
+    description: "Show the working tree status: current branch, staged/unstaged/untracked files. Read-only.",
+    category: "git",
+    mutating: false,
+    parameters: { type: "object", properties: {} },
+  },
+  {
+    name: "git_diff",
+    description: "Show the unstaged diff for the working tree, or for a specific path. Read-only.",
+    category: "git",
+    mutating: false,
+    parameters: {
+      type: "object",
+      properties: { path: { type: "string", description: "Optional path to limit the diff to" } },
+    },
+  },
+  {
+    name: "git_log",
+    description: "Show recent commit history (hash, author, date, message). Read-only.",
+    category: "git",
+    mutating: false,
+    parameters: {
+      type: "object",
+      properties: { limit: { type: "number", description: "Max commits to return, default 20" } },
+    },
+  },
+  {
+    name: "git_branch",
+    description: "List local branches and show the current branch. Read-only.",
+    category: "git",
+    mutating: false,
+    parameters: { type: "object", properties: {} },
+  },
+  {
+    name: "git_commit",
+    description: "Stage and commit changes with a message. Modifies git history — gated by mode like any other write.",
+    category: "git",
+    parameters: {
+      type: "object",
+      properties: {
+        message: { type: "string" },
+        paths: { type: "array", items: { type: "string" }, description: "Specific paths to stage; omit to stage all changes" },
+      },
+      required: ["message"],
+    },
+  },
+  {
     name: "generate_3d_model",
     description:
       "Generate a 3D model (mesh, with an optional collision mesh) from a text prompt via a configured text-to-3D vendor (e.g. Meshy, Tripo3D). Costs money — always requires approval.",
