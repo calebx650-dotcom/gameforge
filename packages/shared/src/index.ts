@@ -48,9 +48,17 @@ export interface ToolDefinition {
   category: PermissionCategory;
   /** JSON Schema for the tool's arguments */
   parameters: Record<string, unknown>;
+  /**
+   * Set for tools that call a metered external service (3D generation,
+   * voice synthesis, motion capture, ...). Like a dangerous shell command,
+   * these always require human approval regardless of agent mode, because
+   * unlike a local file edit they cost real money and can't be undone by
+   * reverting a git commit.
+   */
+  costsMoney?: boolean;
 }
 
-export type PermissionCategory = "read" | "write" | "execution" | "engine" | "git";
+export type PermissionCategory = "read" | "write" | "execution" | "engine" | "git" | "generation";
 
 export type AgentMode = "ask" | "assist" | "build" | "autonomous";
 
@@ -113,4 +121,22 @@ export interface OperationLogEntry {
   kind: "tool_call" | "tool_result" | "message" | "approval" | "error";
   summary: string;
   detail?: unknown;
+}
+
+/**
+ * Common shape for any pipeline that submits work to an external
+ * generative service and polls for a result: 3D mesh generation, PBR
+ * texture generation, rigging/motion capture, voice synthesis. Keeping
+ * this in shared lets packages/agent and apps/server treat every such
+ * pipeline the same way (submit -> poll -> download) without knowing
+ * which vendor is behind it.
+ */
+export type GenerationStatus = "queued" | "running" | "succeeded" | "failed";
+
+export interface GenerationJob<TResult = unknown> {
+  id: string;
+  status: GenerationStatus;
+  progress?: number;
+  result?: TResult;
+  error?: string;
 }

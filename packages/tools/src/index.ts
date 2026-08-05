@@ -7,3 +7,5 @@ export { ToolExecutor } from "./executor.js";
 export type { ApprovalRequest } from "./executor.js";
 export * from "./fs-tools.js";
 export * from "./exec-tool.js";
+export { dispatchGenerationTool, isGenerationTool, GENERATION_TOOL_NAMES } from "./generation-tools.js";
+export type { GenerationProviders } from "./generation-tools.js";

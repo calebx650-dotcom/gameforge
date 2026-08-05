@@ -11,6 +11,10 @@
   (`npm install -g @tauri-apps/cli` or use the `tauri` script in
   `apps/desktop/package.json`).
 - Optional, to actually talk to a local model: [Ollama](https://ollama.com).
+- Optional, for `packages/vision`'s video frame extraction: `ffmpeg` on PATH.
+  Its absence is handled gracefully (a clear `FfmpegNotAvailableError`, not a
+  crash) — this repository's own test/dev environment doesn't have ffmpeg
+  installed, which is exactly the path those tests exercise.
 
 ## Install
 
@@ -36,11 +40,12 @@ npx vitest run packages/tools   # scope to one package
 npx vitest watch                # watch mode while iterating
 ```
 
-As of Phase 1: 36 tests across 10 files, all passing, including an automated
+Latest count: 114 tests across 30 files, all passing, including an automated
 end-to-end smoke test (`apps/server/src/e2e.test.ts`) that drives the full
 "open project -> list models -> chat -> read file -> edit file -> run
 command -> report" loop against a fake Ollama server, with no external
-services required.
+services required. The generation-vendor packages (`assets3d`, `rigging`,
+`audio`) are tested the same way — mocked `fetch`, no live vendor calls.
 
 ## Running the app locally
 
@@ -85,9 +90,11 @@ come back malformed, try a model explicitly documented as supporting Ollama's
 Not implemented yet — see [UNITY_BRIDGE.md](UNITY_BRIDGE.md) for the planned
 design and [ROADMAP.md](ROADMAP.md) for when it lands (Phase 7+).
 
-## Adding a new LLM provider
+## Adding a new LLM or generation-vendor provider
 
-See [PROVIDERS.md](PROVIDERS.md).
+See [PROVIDERS.md](PROVIDERS.md) — LLM providers and generation-vendor
+providers (3D, rigging, motion, voice) follow the same interface + adapter
++ registry pattern.
 
 ## Project structure conventions
 

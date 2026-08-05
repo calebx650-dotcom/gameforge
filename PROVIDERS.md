@@ -1,7 +1,13 @@
-# LLM Providers
+# Providers
 
-GameForge never hard-codes a vendor into the agent or tool system. Everything
-goes through the `LLMProvider` interface in `packages/llm/src/provider.ts`:
+GameForge never hard-codes a vendor into the agent or tool system — not for
+the LLM itself, and not for the generative content pipelines (3D, rigging/
+motion, voice) built on the same pattern. This doc covers the LLM provider
+abstraction first, then the generation-vendor abstractions that mirror it.
+
+## LLM providers
+
+Everything goes through the `LLMProvider` interface in `packages/llm/src/provider.ts`:
 
 ```ts
 interface LLMProvider {
@@ -87,5 +93,75 @@ persisted server-side beyond the lifetime of that request.
 alongside text, and `OpenAICompatibleProvider`/`AnthropicProvider` already
 translate it to each vendor's image format. `OllamaProvider` currently only
 sends text content (Ollama's multimodal message format needs a small
-follow-up to wire through). No caller sends images yet — that lands with the
-screenshot/vision feedback loop in Phase 10.
+follow-up to wire through). `packages/vision`'s `buildVideoAnalysisMessage()`
+already builds exactly this kind of multi-image message from extracted
+video frames — see [ROADMAP.md](ROADMAP.md) for why it isn't wired into the
+agent as a tool yet (no capture source without the Unity bridge).
+
+## Generation-vendor providers
+
+Every generative pipeline (3D, PBR textures, auto-rigging, motion, voice)
+follows the identical shape as `LLMProvider`, adapted for the fact that
+generation is asynchronous almost everywhere in this space:
+
+```ts
+interface Text3DProvider {        // packages/assets3d
+  submitJob(request): Promise<GenerationJob<Text3DResult>>;
+  pollJob(jobId): Promise<GenerationJob<Text3DResult>>;
+}
+```
+
+`GenerationJob<T>` (`packages/shared`) is `{ id, status: "queued"|"running"|
+"succeeded"|"failed", progress?, result?: T, error? }` — the same shape used
+by `PBRMaterialProvider`, `AutoRigProvider`, `MotionProvider`, and
+`VoiceProvider`. A vendor whose API is actually synchronous (ElevenLabs
+returns audio bytes directly; the generic image-based PBR fallback does too)
+just does the real work in `submitJob()` and returns an already-`"succeeded"`
+job, echoing it back from `pollJob()` — so a synchronous vendor and an
+asynchronous one look identical to every caller.
+
+| Package | Interface | Vendors wired today |
+|---|---|---|
+| `packages/assets3d` | `Text3DProvider` | `meshy`, `tripo3d` |
+| `packages/assets3d` | `PBRMaterialProvider` | `meshy-pbr`, `generic-image-pbr` (drives any OpenAI-compatible image endpoint four times, once per PBR channel) |
+| `packages/rigging` | `AutoRigProvider` | `meshy-rig` |
+| `packages/rigging` | `MotionProvider` | `deepmotion` (video-driven motion capture) |
+| `packages/audio` | `VoiceProvider` | `elevenlabs` |
+
+Each package has its own `createXProvider(settings)` factory in a
+`registry.ts`, exactly mirroring `packages/llm/src/registry.ts` — the single
+place that maps a provider id to a concrete class.
+
+### Adding a new generation vendor
+
+Same recipe as adding an LLM provider:
+
+1. Add `packages/<pipeline>/src/providers/your-vendor.ts` implementing the
+   relevant interface (`Text3DProvider`, `PBRMaterialProvider`,
+   `AutoRigProvider`, `MotionProvider`, or `VoiceProvider`).
+2. Wrap network/HTTP errors in `ProviderError` (`@gameforge/shared`), same
+   retryable-on-5xx/429 convention as the LLM providers.
+3. Add one branch to that package's `create*Provider()` factory.
+4. Add unit tests mocking `globalThis.fetch` — see
+   `packages/assets3d/src/providers/meshy.test.ts` or
+   `packages/audio/src/providers/elevenlabs.test.ts` for the pattern.
+
+Nothing in `packages/agent` changes. `packages/tools/src/generation-tools.ts`
+(the dispatch layer the agent's tool calls go through) only depends on the
+interfaces, not the concrete vendor classes — the concrete instances are
+built once per chat session in `apps/server`'s `buildGenerationProviders()`
+from a `generationSettings` field on the WebSocket `chat` request, and handed
+into `ToolExecutor`'s constructor. See [ARCHITECTURE.md](ARCHITECTURE.md)'s
+"Generation tools" section and [SECURITY.md](SECURITY.md) for why
+credentials live there and never in the tool-call arguments the model sees.
+
+### A note on the wire formats above
+
+Meshy's, Tripo3D's, and DeepMotion's adapters follow each vendor's publicly
+documented REST API shape as closely as possible, but haven't been
+exercised against a live account/API key in this environment. If a vendor's
+actual response fields differ from what's coded, the fix is confined to
+that one adapter file — the interface, the tool dispatch layer, and
+everything above it stays untouched. ElevenLabs' adapter is the most
+straightforward of the five (a single synchronous POST returning audio
+bytes) and closely matches their documented API.

@@ -42,15 +42,27 @@ pointing at. Every other module boundary in `/packages` matches the spec.
 ## Package boundaries
 
 ```
-packages/shared   <- depended on by everything; no dependencies of its own
-packages/llm      <- LLMProvider interface + vendor implementations
-packages/tools    <- WorkspaceGuard, permission policy, tool implementations
-packages/project  <- project scanner + compact context summary
-packages/memory   <- SQLite-backed project memory
-packages/agent    <- the think/act/observe loop; depends on llm + tools + shared
-apps/server       <- wires all packages together behind REST/WS
-apps/desktop      <- React UI + Tauri shell; talks to apps/server only
+packages/shared       <- depended on by everything; no dependencies of its own
+packages/llm          <- LLMProvider interface + vendor implementations
+packages/assets3d     <- Text3DProvider + PBRMaterialProvider interfaces + vendor adapters
+packages/rigging      <- AutoRigProvider + MotionProvider interfaces + vendor adapters
+packages/audio        <- VoiceProvider interface + adapter, soundscape/music-mix generators
+packages/level-design <- procedural level/navmesh/lighting generation (pure, no vendor)
+packages/combat-ai    <- boss behavior-tree/combo-graph + hitbox framing (pure, no vendor)
+packages/vision       <- video frame extraction, pacing metrics, vision-analysis prompt builder, backtest
+packages/tools        <- WorkspaceGuard, permission policy, tool implementations (incl. generation tools)
+packages/project      <- project scanner + compact context summary
+packages/memory       <- SQLite-backed project memory
+packages/agent        <- the think/act/observe loop; depends on llm + tools + shared
+apps/server           <- wires all packages together behind REST/WS
+apps/desktop          <- React UI + Tauri shell; talks to apps/server only
 ```
+
+`packages/tools` depends on `assets3d`/`rigging`/`audio`/`level-design`/`combat-ai` — it's the
+dispatch layer that turns a model's tool call into a concrete action, so it's
+the right place to know about these concrete packages, the same way it
+already knows about concrete filesystem/exec implementations. `packages/agent`
+still never imports any of them directly; it only sees `ToolExecutor`.
 
 Rule: `packages/agent` never imports a concrete provider or tool
 implementation directly — only the `LLMProvider` interface and
@@ -96,6 +108,34 @@ See [PROVIDERS.md](PROVIDERS.md) for how to add a new one.
   tool definition, run the permission check, await human approval if
   required (via an injected async callback — the caller decides how approval
   is actually surfaced, e.g. over the chat WebSocket), then dispatch.
+- A `ToolDefinition` can also be marked `costsMoney: true`. Like the
+  dangerous-command heuristic, this **always** forces `"approve"`,
+  regardless of mode — a tool that calls a metered external vendor (3D
+  generation, voice synthesis, motion capture) can't be silently allowed
+  in `autonomous` mode the way a local file edit can, because it spends
+  real money and can't be undone with a git revert.
+
+## Generation tools (`packages/tools/src/generation-tools.ts`)
+
+Seven tools sit alongside the filesystem/execution tools, dispatched by
+`ToolExecutor` exactly the same way: `generate_3d_model`, `generate_pbr_material`,
+`auto_rig_model`, `generate_motion_clip`, and `generate_voice_line` all call a
+configured vendor (`costsMoney: true`, always approved by a human first);
+`generate_level_layout` and `generate_boss_combat_design` run entirely locally
+against `packages/level-design`/`packages/combat-ai` and cost nothing.
+
+Every vendor-backed tool follows the same submit -> poll pattern as the
+underlying `GenerationJob` interface (`packages/shared`): the tool call
+submits the job, then `pollUntilSettled()` blocks (bounded by a timeout,
+default 120s) until it succeeds or fails, returning the settled
+`GenerationJob` as the tool result. Which concrete vendor backs each tool
+is decided per chat session, not per tool call — `apps/server`'s
+`buildGenerationProviders()` builds live provider instances from a
+`generationSettings` field on the WebSocket `chat` request (mirroring how
+`providerSettings` picks the main LLM vendor) and hands them to
+`ToolExecutor`'s constructor. This keeps vendor credentials out of the
+tool-call arguments the model sees and out of the operation log, the same
+way the main LLM's API key never enters the system prompt.
 
 ## Agent loop
 

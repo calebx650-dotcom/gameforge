@@ -11,9 +11,12 @@
   },
   "dependencies": {
     "@gameforge/agent": "*",
+    "@gameforge/assets3d": "*",
+    "@gameforge/audio": "*",
     "@gameforge/llm": "*",
     "@gameforge/memory": "*",
     "@gameforge/project": "*",
+    "@gameforge/rigging": "*",
     "@gameforge/shared": "*",
     "@gameforge/tools": "*",
     "cors": "^2.8.5",

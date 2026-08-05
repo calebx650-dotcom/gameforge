@@ -13,6 +13,7 @@ import {
 import { runCommandTool } from "./exec-tool.js";
 import { decidePermission } from "./permissions.js";
 import type { WorkspaceGuard } from "./workspace.js";
+import { dispatchGenerationTool, isGenerationTool, type GenerationProviders } from "./generation-tools.js";
 
 export type ApprovalRequest = (call: ToolCall, reason: string) => Promise<boolean>;
 
@@ -26,6 +27,7 @@ export class ToolExecutor {
   constructor(
     private readonly guard: WorkspaceGuard,
     private readonly requestApproval: ApprovalRequest,
+    private readonly generationProviders: GenerationProviders = {},
   ) {}
 
   async execute(call: ToolCall, mode: AgentMode): Promise<ToolResultMessage> {
@@ -35,15 +37,22 @@ export class ToolExecutor {
     }
 
     const dangerous = call.name === "run_command" && isDangerousCommand(String(call.arguments.command ?? ""));
-    const decision = decidePermission({ mode, category: definition.category, dangerous });
+    const decision = decidePermission({
+      mode,
+      category: definition.category,
+      dangerous,
+      costsMoney: definition.costsMoney,
+    });
 
     if (decision === "deny") {
       return this.errorResult(call, `Tool "${call.name}" is not permitted in "${mode}" mode.`);
     }
     if (decision === "approve") {
-      const reason = dangerous
-        ? `Command matches a dangerous pattern: ${call.arguments.command}`
-        : `"${call.name}" modifies the project (mode: ${mode}).`;
+      const reason = definition.costsMoney
+        ? `"${call.name}" calls a metered external service and may cost money.`
+        : dangerous
+          ? `Command matches a dangerous pattern: ${call.arguments.command}`
+          : `"${call.name}" modifies the project (mode: ${mode}).`;
       const approved = await this.requestApproval(call, reason);
       if (!approved) {
         return this.errorResult(call, `User declined to approve "${call.name}".`);
@@ -88,6 +97,9 @@ export class ToolExecutor {
         return JSON.stringify(result);
       }
       default:
+        if (isGenerationTool(call.name)) {
+          return dispatchGenerationTool(call.name, args, this.generationProviders);
+        }
         throw new Error(`No implementation registered for tool: ${call.name}`);
     }
   }

@@ -31,19 +31,44 @@ execution" below.
 ## Permission system / agent modes
 
 `packages/tools/src/permissions.ts` — `decidePermission({ mode, category,
-dangerous })`:
+dangerous, costsMoney })`:
 
 | Category                    | ask  | assist  | build | autonomous |
 |------------------------------|------|---------|-------|------------|
 | read                          | allow | allow   | allow | allow      |
-| write / execution / engine / git-mutation | deny | approve | allow | allow      |
+| write / execution / engine / git-mutation / generation (local) | deny | approve | allow | allow      |
 | any command matching the dangerous-pattern list | approve | approve | approve | approve |
+| any tool marked `costsMoney: true` | approve | approve | approve | approve |
 
 "Approve" means the tool call is suspended and a human must respond before it
 runs — in the current UI, an approval card in the chat panel with
 Approve/Deny buttons, round-tripped over the same WebSocket as the chat
 session. There is no "auto-approve everything" switch; autonomous mode still
 requires per-call approval for anything the dangerous-pattern check flags.
+
+## Metered/external generation tools
+
+`generate_3d_model`, `generate_pbr_material`, `auto_rig_model`,
+`generate_motion_clip`, and `generate_voice_line` (`packages/tools/src/generation-tools.ts`)
+each call an external, paid vendor (Meshy, Tripo3D, DeepMotion, ElevenLabs,
+or a generic OpenAI-compatible image endpoint). Their `ToolDefinition`s set
+`costsMoney: true`, which — like the dangerous-command check — forces
+approval in every mode, `autonomous` included. Unlike a file edit, a
+generation job can't be undone by reverting a commit once it's been
+submitted (the vendor has already billed for it), so this is treated as a
+harder gate than ordinary mutation, not merely mode-gated.
+
+`generate_level_layout` and `generate_boss_combat_design` are local, free,
+pure computation (no network call) and are treated as ordinary generation
+tools — approved automatically in `build`/`autonomous`, same as any other
+write.
+
+Vendor credentials for these tools are supplied per chat session (a
+`generationSettings` field alongside the main LLM's `providerSettings`) and
+used only to construct the vendor's provider instance server-side —
+they're never included in the tool call arguments the model sees, the
+system prompt, or the operation log, the same handling as the primary
+LLM's API key described below.
 
 ## Dangerous command detection
 

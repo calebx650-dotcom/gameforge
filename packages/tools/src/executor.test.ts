@@ -104,4 +104,52 @@ describe("ToolExecutor", () => {
     expect(result.isError).toBe(true);
     expect(result.content).toMatch(/escapes workspace/);
   });
+
+  it("always requires approval for a costsMoney generation tool, even in autonomous mode, and runs it once approved", async () => {
+    const root = await makeProject();
+    let approvalReason = "";
+    const executor = new ToolExecutor(
+      new WorkspaceGuard(root),
+      async (_call, reason) => {
+        approvalReason = reason;
+        return true;
+      },
+      {},
+    );
+    const result = await executor.execute(
+      { id: "1", name: "generate_level_layout", arguments: { theme: "gothic_cathedral", seed: 1, roomCount: 3 } },
+      "autonomous",
+    );
+    // generate_level_layout is free/local (costsMoney unset), so it should NOT require approval.
+    expect(approvalReason).toBe("");
+    expect(result.isError).toBeFalsy();
+  });
+
+  it("blocks a costsMoney tool without approval and never calls the underlying provider", async () => {
+    const root = await makeProject();
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => false, {});
+    const result = await executor.execute(
+      { id: "1", name: "generate_3d_model", arguments: { prompt: "gargoyle" } },
+      "autonomous",
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/declined to approve/);
+  });
+
+  it("requires approval for generate_3d_model even in build mode, then reports a missing-provider error once approved", async () => {
+    const root = await makeProject();
+    let wasAskedForApproval = false;
+    const executor = new ToolExecutor(
+      new WorkspaceGuard(root),
+      async () => {
+        wasAskedForApproval = true;
+        return true;
+      },
+      {},
+    );
+    const result = await executor.execute({ id: "1", name: "generate_3d_model", arguments: { prompt: "gargoyle" } }, "build");
+    expect(wasAskedForApproval).toBe(true);
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/No text-to-3D provider configured/);
+  });
 });

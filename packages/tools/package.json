@@ -9,6 +9,11 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@gameforge/shared": "*"
+    "@gameforge/shared": "*",
+    "@gameforge/assets3d": "*",
+    "@gameforge/rigging": "*",
+    "@gameforge/audio": "*",
+    "@gameforge/level-design": "*",
+    "@gameforge/combat-ai": "*"
   }
 }

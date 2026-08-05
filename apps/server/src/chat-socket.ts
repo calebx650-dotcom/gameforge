@@ -3,9 +3,26 @@ import type { WebSocket } from "ws";
 import type { AgentMode, ChatMessage, ProviderSettings, ToolCall } from "@gameforge/shared";
 import { createProvider } from "@gameforge/llm";
 import { Agent } from "@gameforge/agent";
-import { ToolExecutor } from "@gameforge/tools";
+import { ToolExecutor, type GenerationProviders } from "@gameforge/tools";
 import { summarizeProjectContext } from "@gameforge/project";
+import { createText3DProvider, createPBRMaterialProvider, type AssetGenerationSettings } from "@gameforge/assets3d";
+import { createAutoRigProvider, createMotionProvider, type RiggingSettings } from "@gameforge/rigging";
+import { createVoiceProvider, type VoiceSettings } from "@gameforge/audio";
 import type { ProjectManager } from "./project-manager.js";
+
+/**
+ * Per-request settings for whichever generative vendors the user has
+ * configured for this session. Every field is optional — an agent tool
+ * call that needs a vendor the user hasn't configured fails with a clear
+ * "not configured" message rather than the chat request failing outright.
+ */
+interface GenerationSettings {
+  text3d?: AssetGenerationSettings;
+  pbr?: AssetGenerationSettings;
+  autoRig?: RiggingSettings;
+  motion?: RiggingSettings;
+  voice?: VoiceSettings;
+}
 
 interface ChatRequest {
   type: "chat";
@@ -14,6 +31,44 @@ interface ChatRequest {
   providerSettings: ProviderSettings;
   message: string;
   systemPromptExtra?: string;
+  generationSettings?: GenerationSettings;
+}
+
+/**
+ * Builds live provider instances for whichever generation vendors the
+ * request configured. Failures building one vendor (bad provider id,
+ * missing key) don't block the others — they just mean that specific
+ * tool call will fail with a clear error when the agent tries to use it.
+ */
+function buildGenerationProviders(settings: GenerationSettings | undefined): GenerationProviders {
+  if (!settings) return {};
+  const providers: GenerationProviders = {};
+  try {
+    if (settings.text3d) providers.text3d = createText3DProvider(settings.text3d);
+  } catch {
+    /* left unconfigured; the tool call itself will report the missing provider */
+  }
+  try {
+    if (settings.pbr) providers.pbr = createPBRMaterialProvider(settings.pbr);
+  } catch {
+    /* left unconfigured */
+  }
+  try {
+    if (settings.autoRig) providers.autoRig = createAutoRigProvider(settings.autoRig);
+  } catch {
+    /* left unconfigured */
+  }
+  try {
+    if (settings.motion) providers.motion = createMotionProvider(settings.motion);
+  } catch {
+    /* left unconfigured */
+  }
+  try {
+    if (settings.voice) providers.voice = createVoiceProvider(settings.voice);
+  } catch {
+    /* left unconfigured */
+  }
+  return providers;
 }
 
 interface ApprovalResponse {
@@ -27,6 +82,11 @@ type ClientMessage = ChatRequest | ApprovalResponse | CancelRequest;
 
 const SYSTEM_PROMPT_BASE = `You are GameForge, an AI pair-programmer embedded in a game-development workstation.
 You have tools to read, search, create, edit, and delete files within the current project, and to run shell commands.
+You also have tools for generative game-content pipelines: 3D model generation, PBR texture generation, auto-rigging,
+AI motion/animation generation, AI voice synthesis, procedural level layout, and boss combat design (behavior tree +
+combo graph). The content-generation tools that call an external vendor always cost money and always require human
+approval before running, regardless of mode — never assume one was approved implicitly. Level layout and boss combat
+design are local, free, and available without any vendor configured.
 Stay within the project workspace. Explain what you changed and why. Ask before doing anything destructive.`;
 
 /**
@@ -76,13 +136,17 @@ export function handleChatConnection(socket: WebSocket, projects: ProjectManager
 
     activeAbortController = new AbortController();
 
-    const executor = new ToolExecutor(session.guard, (call: ToolCall, reason: string) => {
-      const requestId = randomUUID();
-      return new Promise<boolean>((resolve) => {
-        pendingApprovals.set(requestId, resolve);
-        send(socket, { type: "approval_request", requestId, toolCall: call, reason });
-      });
-    });
+    const executor = new ToolExecutor(
+      session.guard,
+      (call: ToolCall, reason: string) => {
+        const requestId = randomUUID();
+        return new Promise<boolean>((resolve) => {
+          pendingApprovals.set(requestId, resolve);
+          send(socket, { type: "approval_request", requestId, toolCall: call, reason });
+        });
+      },
+      buildGenerationProviders(request.generationSettings),
+    );
 
     let provider;
     try {

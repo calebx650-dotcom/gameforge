@@ -24,4 +24,11 @@ describe("decidePermission", () => {
   it("always requires approval for dangerous commands, even in autonomous mode", () => {
     expect(decidePermission({ mode: "autonomous", category: "execution", dangerous: true })).toBe("approve");
   });
+
+  it("always requires approval for tools that cost money, even in autonomous mode and for read-category tools", () => {
+    for (const mode of ["ask", "assist", "build", "autonomous"] as const) {
+      expect(decidePermission({ mode, category: "generation", costsMoney: true })).toBe("approve");
+      expect(decidePermission({ mode, category: "read", costsMoney: true })).toBe("approve");
+    }
+  });
 });

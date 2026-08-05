@@ -9,6 +9,8 @@ export interface PermissionCheckInput {
   mutating?: boolean;
   /** Set by execution tools when the command matches a known-dangerous pattern. Always forces "approve". */
   dangerous?: boolean;
+  /** Set for tools that call a metered external service. Always forces "approve", in every mode. */
+  costsMoney?: boolean;
 }
 
 /**
@@ -19,6 +21,7 @@ export interface PermissionCheckInput {
 export function decidePermission(input: PermissionCheckInput): PermissionDecision {
   const mutating = input.mutating ?? input.category !== "read";
 
+  if (input.costsMoney) return "approve";
   if (input.category === "read" || !mutating) return "allow";
   if (input.dangerous) return "approve";
 
