@@ -30,9 +30,13 @@ should be working and tested before the next starts.
       wired into the OpenAI-compatible and Anthropic providers. The video
       half of this phase has been pulled forward and built as
       **`packages/vision`**: ffmpeg-based frame extraction (with a clear
-      error and graceful degradation when ffmpeg isn't installed),
-      objective frame-pacing/jitter metrics, a multi-frame vision-analysis
-      prompt builder (`buildVideoAnalysisMessage`) covering motion
+      error and graceful degradation when ffmpeg isn't installed), a
+      `LiveFrameBuffer` in-memory ring buffer for real-time frame streaming
+      (drop-oldest backpressure, zero disk writes — the practical
+      local-first substitute for true Spout2/NDI GPU-memory sharing, which
+      needs a native Unity-side plugin out of scope here), objective
+      frame-pacing/jitter metrics, a multi-frame vision-analysis prompt
+      builder (`buildVideoAnalysisMessage`) covering motion
       smoothness/pacing/jitter/combo-timing, and a `runBacktest` comparator
       for regression-testing gameplay feel against a stored baseline. What's
       still missing: an actual capture *source* — there's no Unity bridge
@@ -46,42 +50,65 @@ should be working and tested before the next starts.
 
 Ahead of the Unity bridge, the following provider-agnostic pipelines were
 built following the same interface + adapter pattern as `packages/llm`,
-each wired into the agent as a tool gated by the `costsMoney` permission
-(external-vendor calls always require human approval, in every mode —
-see SECURITY.md):
+each wired into the agent as a tool. Vendor-backed tools are gated by the
+`costsMoney` permission (always requires human approval, in every mode —
+see SECURITY.md); purely local/pure-computation tools are not.
 
 - **`packages/assets3d`** — text-to-3D generation (`Text3DProvider`:
-  Meshy, Tripo3D adapters) and PBR material/texture generation
-  (`PBRMaterialProvider`: a dedicated Meshy texture adapter, plus a
-  vendor-agnostic fallback that drives any OpenAI-compatible image model
-  four times with channel-specific prompts).
-- **`packages/rigging`** — auto-rigging (`AutoRigProvider`: Meshy adapter)
-  and AI motion/animation generation (`MotionProvider`: DeepMotion adapter,
-  video-driven motion capture retargeted to a rig).
+  cloud — Meshy, Tripo3D; **local-first** — TripoSR, TRELLIS) and PBR
+  material/texture generation (`PBRMaterialProvider`: cloud — a dedicated
+  Meshy texture adapter; **local-capable** — a vendor-agnostic fallback that
+  drives any OpenAI-compatible image model, cloud or local, four times with
+  channel-specific prompts).
+- **`packages/rigging`** — auto-rigging (`AutoRigProvider`: cloud — Meshy;
+  **local-first** — a headless Blender/bpy adapter, no addon required) and
+  AI motion/animation generation (`MotionProvider`: cloud — DeepMotion,
+  video-driven; **local-first** — a MotionGPT-style adapter, text-driven).
+  Also: offline animation retargeting — `generateHumanoidAvatarMapping()`
+  (Mixamo/Blender/plain bone-name heuristics -> Mecanim Humanoid slots),
+  `generateLocomotionAnimatorController()` (locomotion blend tree + attack
+  states + hit-reaction interrupt, as data for Unity's `AnimatorController`
+  scripting API), `generateRagdollConfig()` (per-bone joint/collider limits
+  using limb-appropriate presets), and `generateRootMotionConfig()`. All
+  pure local computation.
 - **`packages/level-design`** — deterministic, seeded procedural level
   generation for three themes (gothic cathedral, urban arena, asylum
   hallway): room graph + corridors + thematic decor placement, a NavMesh
-  bake-input computer (walkable-surface geometry the future Unity bridge
-  would bake against), and a horror-tuned lighting-plan generator. Pure
-  local computation — no external vendor, no cost.
+  bake-input computer, a horror-tuned lighting-plan generator, and
+  `generateProBuilderCommands()` (translates a level layout into graybox
+  geometry build commands for a future Unity-side ProBuilder script — see
+  UNITY_BRIDGE.md). Pure local computation — no external vendor, no cost.
 - **`packages/combat-ai`** — auto-generates a boss's behavior tree (phase
   gating by health threshold, enraged-state cooldown scaling, combo-chain
   sequencing) and combo transition graph from a declarative spec, plus
   hitbox/hurtbox frame-binding and validation (overlap/range checks)
   against an animation clip's frame count. Pure local computation.
-- **`packages/audio`** — AI voice synthesis (`VoiceProvider`: ElevenLabs
-  adapter) plus deterministic per-room ambient soundscape generation and a
-  continuous layered dynamic-music-intensity mixer (crossfades
-  "exploration/tension/combat/climax"-style stems based on a 0-1 intensity
-  value instead of hard-cutting tracks).
+- **`packages/audio`** — AI voice synthesis (`VoiceProvider`: cloud —
+  ElevenLabs; **local-first** — Kokoro for fast fixed-voice synthesis,
+  Coqui XTTS-v2 for zero-shot voice cloning) and ambient
+  music/sound-effect generation (`MusicGenerationProvider`: **local-only
+  today** — AudioCraft/MusicGen+AudioGen; no cloud vendor wired), plus
+  deterministic per-room ambient soundscape generation and a continuous
+  layered dynamic-music-intensity mixer.
+- **`packages/shader-synthesis`** — HLSL/ShaderLab shader generators
+  (atmospheric fog, grime/decal overlay, night-vision post-process — full
+  compilable-looking shader text, not just parameters), a typed
+  `ShaderGraphSpec` intermediate representation + a distance-based
+  grime-blend graph generator (see UNITY_BRIDGE.md for why this targets
+  GameForge's own IR rather than Unity's internal `.shadergraph` format
+  directly), and a themed post-processing Volume profile generator (bloom/
+  vignette/color-grading/fog/film-grain/chromatic-aberration per level
+  theme). Pure local computation, no vendor, no GPU needed to generate.
 
 Every vendor-backed provider here follows the exact same shape as
 `packages/llm`'s providers: an interface in the package root, one adapter
 file per vendor under `providers/`, a `create*Provider()` factory, and
-unit tests against a mocked `fetch` — so adding another vendor (a second
-voice provider, Wonder Dynamics alongside DeepMotion, Point-E alongside
-Meshy/Tripo3D) means one new file and one new registry branch, matching
-[PROVIDERS.md](PROVIDERS.md)'s pattern.
+unit tests against a mocked `fetch` (or, for the Blender/ffmpeg CLI-based
+adapters, a real-environment availability check with graceful
+degradation) — so adding another vendor (Hunyuan3D-2 alongside TripoSR/
+TRELLIS, Wonder Dynamics alongside DeepMotion/MotionGPT) means one new file
+and one new registry branch, matching [PROVIDERS.md](PROVIDERS.md)'s
+pattern.
 
 ## Smaller known gaps, not phase-blocking
 
@@ -97,10 +124,21 @@ Meshy/Tripo3D) means one new file and one new registry branch, matching
   external job holds up that turn. Revisit if that proves too slow in
   practice.
 - The vendor API field names in `packages/assets3d`/`packages/rigging`'s
-  adapters (Meshy, Tripo3D, DeepMotion) follow each vendor's publicly
+  cloud adapters (Meshy, Tripo3D, DeepMotion) follow each vendor's publicly
   documented wire format as closely as possible but haven't been
   exercised against a live account/API key in this environment — if a
   vendor's actual response shape differs, the fix is confined to that one
   adapter file, never to the interface or the agent/tool layers above it.
-- `packages/vision`'s video pipeline isn't wired into the agent as a tool
-  yet — see Phase 10 above.
+  Similarly, none of the local-first adapters (TripoSR, TRELLIS, Blender,
+  MotionGPT, Kokoro, XTTS-v2, AudioCraft) have been run against an actual
+  local inference server in this environment (no GPU, no Blender install
+  here) — see PROVIDERS.md's "Running local-first" section.
+- `packages/vision`'s video pipeline (both the ffmpeg static-extraction
+  path and the `LiveFrameBuffer` real-time path) isn't wired into the agent
+  as a tool yet — see Phase 10 above.
+- The Unity engine-assembly translation layer (`generateProBuilderCommands`,
+  the Animator Controller/humanoid-mapping/ragdoll generators, the
+  `ShaderGraphSpec` IR) produces data a Unity-side script would consume —
+  none of it has been run against an actual Unity Editor, since there is no
+  Unity install in this environment. See UNITY_BRIDGE.md's adoption of
+  `unity-mcp` as the concrete bridge protocol.

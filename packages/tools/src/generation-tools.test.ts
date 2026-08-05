@@ -78,4 +78,52 @@ describe("dispatchGenerationTool", () => {
     const result = await dispatchGenerationTool("generate_voice_line", { text: "Begone.", voiceId: "v1", style: "growl" }, { voice });
     expect(JSON.parse(result).status).toBe("succeeded");
   });
+
+  it("generates a shader as text via the free local shader synthesis tool", async () => {
+    const result = await dispatchGenerationTool("generate_shader", { kind: "atmospheric_fog", shaderName: "Test/Fog" }, {});
+    expect(result).toContain('Shader "Test/Fog"');
+  });
+
+  it("rejects an unknown shader kind", async () => {
+    await expect(dispatchGenerationTool("generate_shader", { kind: "bogus" }, {})).rejects.toThrow(/Unknown shader kind/);
+  });
+
+  it("generates a themed post-processing profile via the free local tool", async () => {
+    const result = await dispatchGenerationTool("generate_post_processing_profile", { theme: "asylum_hallway" }, {});
+    expect(JSON.parse(result).theme).toBe("asylum_hallway");
+  });
+
+  it("exports level geometry as ProBuilder commands from a level layout", async () => {
+    const layoutResult = await dispatchGenerationTool("generate_level_layout", { theme: "urban_arena", seed: 1, roomCount: 3 }, {});
+    const { layout } = JSON.parse(layoutResult);
+    const result = await dispatchGenerationTool("export_level_geometry", { layout }, {});
+    const commands = JSON.parse(result);
+    expect(commands.some((c: { type: string }) => c.type === "BuildRoomShell")).toBe(true);
+  });
+
+  it("generates a humanoid avatar mapping and feeds it into ragdoll config generation", async () => {
+    const mappingResult = await dispatchGenerationTool(
+      "generate_humanoid_avatar_mapping",
+      { boneNames: ["Hips", "Spine", "Head", "LeftUpperArm", "LeftLowerArm", "LeftHand", "RightUpperArm", "RightLowerArm", "RightHand", "LeftUpperLeg", "LeftLowerLeg", "LeftFoot", "RightUpperLeg", "RightLowerLeg", "RightFoot"] },
+      {},
+    );
+    const mapping = JSON.parse(mappingResult);
+    expect(mapping.isValid).toBe(true);
+
+    const ragdollResult = await dispatchGenerationTool("generate_ragdoll_config", { boneMap: mapping.boneMap }, {});
+    const configs = JSON.parse(ragdollResult);
+    expect(configs.some((c: { boneName: string }) => c.boneName === "Head")).toBe(true);
+  });
+
+  it("generates a locomotion animator controller via the free local tool", async () => {
+    const result = await dispatchGenerationTool("generate_animator_controller", { attackClips: ["Slash"] }, {});
+    const controller = JSON.parse(result);
+    expect(controller.defaultState).toBe("Locomotion");
+  });
+
+  it("requires a configured music generation provider for generate_ambient_audio", async () => {
+    await expect(dispatchGenerationTool("generate_ambient_audio", { prompt: "dark drone", kind: "ambient_music" }, {})).rejects.toThrow(
+      /No music generation provider configured/,
+    );
+  });
 });

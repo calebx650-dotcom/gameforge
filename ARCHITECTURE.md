@@ -42,27 +42,40 @@ pointing at. Every other module boundary in `/packages` matches the spec.
 ## Package boundaries
 
 ```
-packages/shared       <- depended on by everything; no dependencies of its own
-packages/llm          <- LLMProvider interface + vendor implementations
-packages/assets3d     <- Text3DProvider + PBRMaterialProvider interfaces + vendor adapters
-packages/rigging      <- AutoRigProvider + MotionProvider interfaces + vendor adapters
-packages/audio        <- VoiceProvider interface + adapter, soundscape/music-mix generators
-packages/level-design <- procedural level/navmesh/lighting generation (pure, no vendor)
-packages/combat-ai    <- boss behavior-tree/combo-graph + hitbox framing (pure, no vendor)
-packages/vision       <- video frame extraction, pacing metrics, vision-analysis prompt builder, backtest
-packages/tools        <- WorkspaceGuard, permission policy, tool implementations (incl. generation tools)
-packages/project      <- project scanner + compact context summary
-packages/memory       <- SQLite-backed project memory
-packages/agent        <- the think/act/observe loop; depends on llm + tools + shared
-apps/server           <- wires all packages together behind REST/WS
-apps/desktop          <- React UI + Tauri shell; talks to apps/server only
+packages/shared          <- depended on by everything; no dependencies of its own
+packages/llm             <- LLMProvider interface + vendor implementations
+packages/assets3d        <- Text3DProvider + PBRMaterialProvider interfaces + cloud/local adapters
+packages/rigging         <- AutoRigProvider + MotionProvider interfaces + cloud/local adapters;
+                            + humanoid retargeting/Animator/ragdoll spec generators (pure)
+packages/audio           <- VoiceProvider + MusicGenerationProvider interfaces + cloud/local adapters;
+                            + soundscape/music-mix generators (pure)
+packages/level-design    <- procedural level/navmesh/lighting/ProBuilder-export generation (pure, no vendor)
+packages/combat-ai       <- boss behavior-tree/combo-graph + hitbox framing (pure, no vendor)
+packages/shader-synthesis <- HLSL shader / ShaderGraph spec / post-processing profile generation (pure, no vendor)
+packages/vision          <- video frame extraction, live frame relay, pacing metrics, vision-analysis
+                            prompt builder, backtest
+packages/tools           <- WorkspaceGuard, permission policy, tool implementations (incl. generation tools)
+packages/project         <- project scanner + compact context summary
+packages/memory          <- SQLite-backed project memory
+packages/agent           <- the think/act/observe loop; depends on llm + tools + shared
+apps/server              <- wires all packages together behind REST/WS
+apps/desktop             <- React UI + Tauri shell; talks to apps/server only
 ```
 
-`packages/tools` depends on `assets3d`/`rigging`/`audio`/`level-design`/`combat-ai` — it's the
-dispatch layer that turns a model's tool call into a concrete action, so it's
-the right place to know about these concrete packages, the same way it
-already knows about concrete filesystem/exec implementations. `packages/agent`
-still never imports any of them directly; it only sees `ToolExecutor`.
+`packages/tools` depends on `assets3d`/`rigging`/`audio`/`level-design`/`combat-ai`/`shader-synthesis`
+— it's the dispatch layer that turns a model's tool call into a concrete
+action, so it's the right place to know about these concrete packages, the
+same way it already knows about concrete filesystem/exec implementations.
+`packages/agent` still never imports any of them directly; it only sees
+`ToolExecutor`.
+
+Every vendor-backed interface in `assets3d`/`rigging`/`audio` has both a
+cloud implementation and at least one local-first implementation (see
+PROVIDERS.md's "Running local-first" section) — `packages/tools` and
+`packages/agent` cannot tell which kind is behind a given provider
+instance, and don't need to. This is what makes "run entirely on local
+GPUs, no cloud account, offline" an actual property of the architecture,
+not just a stated goal contradicted by what's wired up.
 
 Rule: `packages/agent` never imports a concrete provider or tool
 implementation directly — only the `LLMProvider` interface and
@@ -117,12 +130,33 @@ See [PROVIDERS.md](PROVIDERS.md) for how to add a new one.
 
 ## Generation tools (`packages/tools/src/generation-tools.ts`)
 
-Seven tools sit alongside the filesystem/execution tools, dispatched by
-`ToolExecutor` exactly the same way: `generate_3d_model`, `generate_pbr_material`,
-`auto_rig_model`, `generate_motion_clip`, and `generate_voice_line` all call a
-configured vendor (`costsMoney: true`, always approved by a human first);
-`generate_level_layout` and `generate_boss_combat_design` run entirely locally
-against `packages/level-design`/`packages/combat-ai` and cost nothing.
+Thirteen tools sit alongside the filesystem/execution tools, dispatched by
+`ToolExecutor` exactly the same way, in two groups:
+
+**Vendor-backed** (`costsMoney: true`, always requires human approval,
+regardless of mode and regardless of whether the configured vendor happens
+to be a paid cloud API or a free local model — see the note below):
+`generate_3d_model`, `generate_pbr_material`, `auto_rig_model`,
+`generate_motion_clip`, `generate_voice_line`, `generate_ambient_audio`.
+
+**Purely local, free, no vendor configuration needed** (ordinary `generation`
+category — gated by mode like any other write, no forced approval):
+`generate_level_layout`, `generate_boss_combat_design`, `generate_shader`,
+`generate_post_processing_profile`, `export_level_geometry`,
+`generate_animator_controller`, `generate_humanoid_avatar_mapping`,
+`generate_ragdoll_config`.
+
+**Why vendor-backed tools always require approval even when the configured
+provider is a free local model**: `costsMoney` lives on the `ToolDefinition`,
+not on the concrete provider instance — the permission check in
+`packages/tools/src/permissions.ts` has no visibility into which vendor a
+session happens to have configured for a given tool, only the tool's static
+definition. Making that decision provider-aware would be more precise (a
+local Kokoro call really does cost nothing) but adds real complexity for
+comparatively little safety benefit — clicking one extra "approve" on a free
+local call costs the user a second, while a wrongly-silent approval on an
+actually-paid cloud call could cost real money. Simplicity won this
+trade-off deliberately; revisit if it proves annoying in practice.
 
 Every vendor-backed tool follows the same submit -> poll pattern as the
 underlying `GenerationJob` interface (`packages/shared`): the tool call

@@ -1,9 +1,16 @@
 import type { GenerationJob } from "@gameforge/shared";
 import type { Text3DProvider, PBRMaterialProvider, MeshStyle } from "@gameforge/assets3d";
 import type { AutoRigProvider, MotionProvider, RigType, ActionType } from "@gameforge/rigging";
-import type { VoiceProvider, VoiceStyle } from "@gameforge/audio";
-import { generateLevel, type LevelTheme } from "@gameforge/level-design";
+import { generateLocomotionAnimatorController, generateRagdollConfig, generateHumanoidAvatarMapping, type HumanoidSlot } from "@gameforge/rigging";
+import type { VoiceProvider, VoiceStyle, MusicGenerationProvider, AudioClipKind } from "@gameforge/audio";
+import { generateLevel, generateProBuilderCommands, type LevelTheme, type LevelLayout } from "@gameforge/level-design";
 import { generateBossBehaviorTree, buildComboGraph, validateComboGraph, type BossSpec } from "@gameforge/combat-ai";
+import {
+  generateAtmosphericFogShader,
+  generateGrimeOverlayShader,
+  generateNightVisionPostProcessShader,
+  generatePostProcessingProfile,
+} from "@gameforge/shader-synthesis";
 
 /**
  * Per-session handles to whichever generative vendors the user configured
@@ -11,7 +18,10 @@ import { generateBossBehaviorTree, buildComboGraph, validateComboGraph, type Bos
  * flow through the model's context — the same principle already applied
  * to the main LLM's API key (see SECURITY.md). A tool call that needs a
  * provider that isn't configured fails with a clear message rather than
- * silently no-op'ing.
+ * silently no-op'ing. Each of these interfaces has at least one
+ * local-first implementation available (TripoSR/TRELLIS, Blender/
+ * MotionGPT, Kokoro/XTTS/AudioCraft) alongside the cloud vendors — see
+ * PROVIDERS.md.
  */
 export interface GenerationProviders {
   text3d?: Text3DProvider;
@@ -19,6 +29,7 @@ export interface GenerationProviders {
   autoRig?: AutoRigProvider;
   motion?: MotionProvider;
   voice?: VoiceProvider;
+  music?: MusicGenerationProvider;
 }
 
 export const GENERATION_TOOL_NAMES = [
@@ -27,8 +38,15 @@ export const GENERATION_TOOL_NAMES = [
   "auto_rig_model",
   "generate_motion_clip",
   "generate_voice_line",
+  "generate_ambient_audio",
   "generate_level_layout",
   "generate_boss_combat_design",
+  "generate_shader",
+  "generate_post_processing_profile",
+  "export_level_geometry",
+  "generate_animator_controller",
+  "generate_humanoid_avatar_mapping",
+  "generate_ragdoll_config",
 ] as const;
 
 interface PollOptions {
@@ -119,6 +137,15 @@ export async function dispatchGenerationTool(
       });
       return JSON.stringify(await pollUntilSettled((id) => provider.pollJob(id), job.id, pollOptions));
     }
+    case "generate_ambient_audio": {
+      const provider = requireProvider(providers.music, "music generation");
+      const job = await provider.submitJob({
+        prompt: String(args.prompt),
+        kind: (args.kind as AudioClipKind) ?? "ambient_music",
+        durationSeconds: args.durationSeconds as number | undefined,
+      });
+      return JSON.stringify(await pollUntilSettled((id) => provider.pollJob(id), job.id, pollOptions));
+    }
     case "generate_level_layout": {
       const result = generateLevel({
         theme: args.theme as LevelTheme,
@@ -134,6 +161,45 @@ export async function dispatchGenerationTool(
       const behaviorTree = generateBossBehaviorTree(spec);
       const comboGraph = Object.fromEntries(buildComboGraph(spec).edges);
       return JSON.stringify({ behaviorTree, comboGraph });
+    }
+    case "generate_shader": {
+      const kind = String(args.kind);
+      if (kind === "atmospheric_fog") return generateAtmosphericFogShader(args as Record<string, never>);
+      if (kind === "grime_overlay") return generateGrimeOverlayShader(args as Record<string, never>);
+      if (kind === "night_vision") return generateNightVisionPostProcessShader(args as Record<string, never>);
+      throw new Error(`Unknown shader kind: ${kind}. Expected atmospheric_fog, grime_overlay, or night_vision.`);
+    }
+    case "generate_post_processing_profile": {
+      const profile = generatePostProcessingProfile(args.theme as LevelTheme);
+      return JSON.stringify(profile);
+    }
+    case "export_level_geometry": {
+      const layout = args.layout as LevelLayout;
+      const commands = generateProBuilderCommands(layout, {
+        wallHeight: args.wallHeight as number | undefined,
+        wallThickness: args.wallThickness as number | undefined,
+        corridorWidth: args.corridorWidth as number | undefined,
+      });
+      return JSON.stringify(commands);
+    }
+    case "generate_animator_controller": {
+      const controller = generateLocomotionAnimatorController({
+        idleClip: args.idleClip as string | undefined,
+        walkClip: args.walkClip as string | undefined,
+        runClip: args.runClip as string | undefined,
+        attackClips: args.attackClips as string[] | undefined,
+        hitReactionClip: args.hitReactionClip as string | undefined,
+      });
+      return JSON.stringify(controller);
+    }
+    case "generate_humanoid_avatar_mapping": {
+      const mapping = generateHumanoidAvatarMapping(args.boneNames as string[]);
+      return JSON.stringify(mapping);
+    }
+    case "generate_ragdoll_config": {
+      const boneMap = args.boneMap as Partial<Record<HumanoidSlot, string>>;
+      const configs = generateRagdollConfig(boneMap);
+      return JSON.stringify(configs);
     }
     default:
       throw new Error(`No generation tool implementation for: ${name}`);

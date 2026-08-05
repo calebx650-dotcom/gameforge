@@ -16,3 +16,5 @@ export type { WalkableSurface, NavMeshBakeInput } from "./navmesh.js";
 export { generateLightingPlan } from "./lighting.js";
 export type { LightPlacement, LightingPlan, LightType } from "./lighting.js";
 export { createRng, pick, intBetween } from "./rng.js";
+export { generateProBuilderCommands } from "./probuilder-export.js";
+export type { ProBuilderCommand, ProBuilderExportOptions, Vec3 } from "./probuilder-export.js";

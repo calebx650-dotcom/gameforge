@@ -174,6 +174,22 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: "generate_ambient_audio",
+    description:
+      "Generate ambient/atmospheric music or a one-shot sound effect from a text prompt via a configured music-generation vendor (e.g. AudioCraft). Costs money — always requires approval.",
+    category: "generation",
+    costsMoney: true,
+    parameters: {
+      type: "object",
+      properties: {
+        prompt: { type: "string" },
+        kind: { type: "string", enum: ["ambient_music", "sound_effect"] },
+        durationSeconds: { type: "number" },
+      },
+      required: ["prompt", "kind"],
+    },
+  },
+  {
     name: "generate_level_layout",
     description:
       "Procedurally generate a level layout (room graph, corridors, thematic decor props) for a supported horror/action theme. Purely local computation — free, no external service.",
@@ -202,6 +218,87 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         },
       },
       required: ["spec"],
+    },
+  },
+  {
+    name: "generate_shader",
+    description:
+      "Generate a complete Unity ShaderLab/HLSL shader (atmospheric_fog, grime_overlay, or night_vision) as text, ready to write into the project. Purely local computation — free, no external service.",
+    category: "generation",
+    parameters: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["atmospheric_fog", "grime_overlay", "night_vision"] },
+        shaderName: { type: "string" },
+        colorHex: { type: "string" },
+      },
+      required: ["kind"],
+    },
+  },
+  {
+    name: "generate_post_processing_profile",
+    description:
+      "Generate a themed Unity post-processing Volume profile (bloom, vignette, color grading, fog, film grain, chromatic aberration) for a level theme. Purely local computation — free, no external service.",
+    category: "generation",
+    parameters: {
+      type: "object",
+      properties: { theme: { type: "string", enum: ["gothic_cathedral", "urban_arena", "asylum_hallway"] } },
+      required: ["theme"],
+    },
+  },
+  {
+    name: "export_level_geometry",
+    description:
+      "Convert a generated level layout into ProBuilder graybox geometry build commands (room shells, corridor floors) for a future Unity-side script to execute. Purely local computation — free, no external service.",
+    category: "generation",
+    parameters: {
+      type: "object",
+      properties: {
+        layout: { type: "object", description: "A LevelLayout, as returned by generate_level_layout" },
+        wallHeight: { type: "number" },
+        wallThickness: { type: "number" },
+      },
+      required: ["layout"],
+    },
+  },
+  {
+    name: "generate_animator_controller",
+    description:
+      "Generate a Unity Animator Controller state-machine spec (locomotion blend tree, attack states, hit-reaction interrupt) from clip names. Purely local computation — free, no external service.",
+    category: "generation",
+    parameters: {
+      type: "object",
+      properties: {
+        idleClip: { type: "string" },
+        walkClip: { type: "string" },
+        runClip: { type: "string" },
+        attackClips: { type: "array", items: { type: "string" } },
+        hitReactionClip: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "generate_humanoid_avatar_mapping",
+    description:
+      "Map arbitrary source bone names (Mixamo, Blender, or plain naming) onto Unity's Mecanim Humanoid bone slots using name-pattern heuristics. Purely local computation — free, no external service.",
+    category: "generation",
+    parameters: {
+      type: "object",
+      properties: { boneNames: { type: "array", items: { type: "string" } } },
+      required: ["boneNames"],
+    },
+  },
+  {
+    name: "generate_ragdoll_config",
+    description:
+      "Generate ragdoll joint configuration (collider shape, mass, angular limits) per bone from a Humanoid avatar bone mapping. Purely local computation — free, no external service.",
+    category: "generation",
+    parameters: {
+      type: "object",
+      properties: {
+        boneMap: { type: "object", description: "Humanoid slot -> bone name, as returned by generate_humanoid_avatar_mapping" },
+      },
+      required: ["boneMap"],
     },
   },
 ];

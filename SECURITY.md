@@ -49,26 +49,40 @@ requires per-call approval for anything the dangerous-pattern check flags.
 ## Metered/external generation tools
 
 `generate_3d_model`, `generate_pbr_material`, `auto_rig_model`,
-`generate_motion_clip`, and `generate_voice_line` (`packages/tools/src/generation-tools.ts`)
-each call an external, paid vendor (Meshy, Tripo3D, DeepMotion, ElevenLabs,
-or a generic OpenAI-compatible image endpoint). Their `ToolDefinition`s set
-`costsMoney: true`, which — like the dangerous-command check — forces
-approval in every mode, `autonomous` included. Unlike a file edit, a
+`generate_motion_clip`, `generate_voice_line`, and `generate_ambient_audio`
+(`packages/tools/src/generation-tools.ts`) each call a configured vendor —
+which may be a paid cloud API (Meshy, Tripo3D, DeepMotion, ElevenLabs) **or**
+a free local model you run yourself (TripoSR, TRELLIS, Blender, MotionGPT,
+Kokoro, XTTS-v2, AudioCraft — see PROVIDERS.md). Their `ToolDefinition`s set
+`costsMoney: true` regardless of which kind of vendor is actually
+configured, which — like the dangerous-command check — forces approval in
+every mode, `autonomous` included.
+
+This is deliberately not provider-aware: the permission check has no way to
+know at approval time whether the session's configured `Text3DProvider` is
+a paid API or a local server, so it treats every call to one of these six
+tools the same way. The cost of that simplicity is one extra approval click
+for a free local generation; the alternative — a permission system that
+skips approval for "probably free" providers — risks silently approving a
+call that turns out to hit a paid API after all. Unlike a file edit, a paid
 generation job can't be undone by reverting a commit once it's been
-submitted (the vendor has already billed for it), so this is treated as a
-harder gate than ordinary mutation, not merely mode-gated.
+submitted (the vendor has already billed for it), so this errs toward the
+stricter option.
 
-`generate_level_layout` and `generate_boss_combat_design` are local, free,
-pure computation (no network call) and are treated as ordinary generation
-tools — approved automatically in `build`/`autonomous`, same as any other
-write.
+`generate_level_layout`, `generate_boss_combat_design`, `generate_shader`,
+`generate_post_processing_profile`, `export_level_geometry`,
+`generate_animator_controller`, `generate_humanoid_avatar_mapping`, and
+`generate_ragdoll_config` are local, free, pure computation (no network
+call, no vendor of any kind) and are treated as ordinary generation tools —
+approved automatically in `build`/`autonomous`, same as any other write.
 
-Vendor credentials for these tools are supplied per chat session (a
-`generationSettings` field alongside the main LLM's `providerSettings`) and
-used only to construct the vendor's provider instance server-side —
-they're never included in the tool call arguments the model sees, the
-system prompt, or the operation log, the same handling as the primary
-LLM's API key described below.
+Vendor credentials (cloud API keys; local providers typically need none —
+they're just a `baseUrl` pointing at your own machine) are supplied per
+chat session (a `generationSettings` field alongside the main LLM's
+`providerSettings`) and used only to construct the vendor's provider
+instance server-side — they're never included in the tool call arguments
+the model sees, the system prompt, or the operation log, the same handling
+as the primary LLM's API key described below.
 
 ## Dangerous command detection
 
@@ -114,6 +128,28 @@ commits, diff/revert UI, and checkpoint restore. The project scanner does
 report git status (branch, dirty file count) so the agent's system prompt at
 least reflects whether there's uncommitted work before it starts. See
 [ROADMAP.md](ROADMAP.md).
+
+## Local model execution (Blender CLI, local HTTP inference servers)
+
+`BlenderAutoRigProvider` (`packages/rigging`) shells out to a headless
+`blender --background --python ...` invocation — a second, separate code
+path from `packages/tools`'s `run_command`, and it does **not** go through
+`WorkspaceGuard` or the dangerous-command heuristic, because it isn't
+running an arbitrary model-authored shell command; it runs one fixed,
+hand-written rigging script against a mesh path the tool call supplies.
+The mesh path itself is not currently validated against the project
+workspace — a call to `auto_rig_model` with `provider: "blender-auto-rig"`
+could in principle point Blender at a file outside the project. Since
+`auto_rig_model` already requires human approval on every call (`costsMoney:
+true`, see above), the approval prompt is the control that catches this
+today; a workspace check on `meshUrl` specifically would be a reasonable
+hardening follow-up.
+
+The other local-first providers (TripoSR, TRELLIS, MotionGPT, Kokoro,
+XTTS-v2, AudioCraft) only ever make outbound HTTP requests to a
+user-configured `baseUrl` — no different in kind from any cloud vendor call,
+just typically pointed at `127.0.0.1`. They inherit the same `costsMoney`
+approval gate.
 
 ## Audit log
 

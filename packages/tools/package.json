@@ -14,6 +14,7 @@
     "@gameforge/rigging": "*",
     "@gameforge/audio": "*",
     "@gameforge/level-design": "*",
-    "@gameforge/combat-ai": "*"
+    "@gameforge/combat-ai": "*",
+    "@gameforge/shader-synthesis": "*"
   }
 }

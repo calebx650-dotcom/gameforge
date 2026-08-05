@@ -120,17 +120,55 @@ just does the real work in `submitJob()` and returns an already-`"succeeded"`
 job, echoing it back from `pollJob()` — so a synchronous vendor and an
 asynchronous one look identical to every caller.
 
-| Package | Interface | Vendors wired today |
-|---|---|---|
-| `packages/assets3d` | `Text3DProvider` | `meshy`, `tripo3d` |
-| `packages/assets3d` | `PBRMaterialProvider` | `meshy-pbr`, `generic-image-pbr` (drives any OpenAI-compatible image endpoint four times, once per PBR channel) |
-| `packages/rigging` | `AutoRigProvider` | `meshy-rig` |
-| `packages/rigging` | `MotionProvider` | `deepmotion` (video-driven motion capture) |
-| `packages/audio` | `VoiceProvider` | `elevenlabs` |
+| Package | Interface | Cloud vendors | Local-first vendors |
+|---|---|---|---|
+| `packages/assets3d` | `Text3DProvider` | `meshy`, `tripo3d` | `triposr` (VAST-AI-Research/TripoSR, image-to-3D, <0.5s/GPU), `trellis` (microsoft/TRELLIS) |
+| `packages/assets3d` | `PBRMaterialProvider` | `meshy-pbr` | `generic-image-pbr` (drives any OpenAI-compatible image endpoint, cloud or local, four times — once per PBR channel) |
+| `packages/rigging` | `AutoRigProvider` | `meshy-rig` | `blender-auto-rig` (headless Blender/bpy, no addon required) |
+| `packages/rigging` | `MotionProvider` | `deepmotion` (video-driven) | `motiongpt` (text-driven, wraps MotionGPT/ReGenNet-style models) |
+| `packages/audio` | `VoiceProvider` | `elevenlabs` | `kokoro` (hexgrad/kokoro, 82M params, millisecond synthesis), `xtts` (coqui-ai/TTS XTTS-v2, zero-shot voice cloning) |
+| `packages/audio` | `MusicGenerationProvider` | — (no cloud vendor wired) | `audiocraft` (facebookresearch/audiocraft: MusicGen for music beds, AudioGen for sfx/ambience) |
 
 Each package has its own `createXProvider(settings)` factory in a
 `registry.ts`, exactly mirroring `packages/llm/src/registry.ts` — the single
-place that maps a provider id to a concrete class.
+place that maps a provider id to a concrete class. **The agent, the tool
+dispatch layer, and the permission system cannot tell which kind of vendor
+is behind a given tool call** — a cloud API and a local inference server
+both just implement the same interface. That's deliberate: it's what makes
+"run entirely on local GPUs when offline" an actual capability of this
+architecture rather than a promise contradicted by what's wired up. See
+"Running local-first" below for how the local options actually work.
+
+### Running local-first
+
+Every local-first provider above talks to a small HTTP (or, for
+`blender-auto-rig`, a CLI) server you run yourself — GameForge doesn't
+bundle or manage these model runtimes:
+
+- **TripoSR / TRELLIS**: run the upstream repo's inference code behind a
+  thin FastAPI/Flask wrapper exposing `POST /generate` (see
+  `packages/assets3d/src/providers/triposr.ts`/`trellis.ts` for the exact
+  expected request/response shape — deliberately minimal, easy to wrap
+  around either repo's existing Python entrypoint).
+- **Blender auto-rig**: just needs `blender` on `PATH` — no server, no
+  addon. `BlenderAutoRigProvider` shells out to a headless
+  `blender --background --python ...` invocation with a built-in rigging
+  script (basic bone placement + automatic-weight skinning); see
+  `packages/rigging/src/providers/blender-auto-rig.ts`.
+- **MotionGPT**: same local-HTTP-server shape as TripoSR/TRELLIS.
+- **Kokoro**: the community **Kokoro-FastAPI** wrapper already speaks
+  OpenAI's `/v1/audio/speech` shape, so `KokoroProvider` needs zero
+  Kokoro-specific protocol work.
+- **Coqui XTTS-v2**: `coqui-ai/TTS`'s built-in `tts-server` (or an
+  equivalent wrapper) exposing `POST /api/tts` with a `speaker_wav`
+  reference-audio path for cloning.
+- **AudioCraft**: a thin wrapper around `facebookresearch/audiocraft`'s
+  `MusicGen`/`AudioGen` pipelines, routed by the `kind` field
+  (`ambient_music` -> MusicGen, `sound_effect` -> AudioGen).
+
+None of these adapters have been exercised against a real running instance
+of the wrapped model in this environment (no GPU here) — see the note at
+the bottom of this file for what that means in practice.
 
 ### Adding a new generation vendor
 
@@ -163,5 +201,31 @@ exercised against a live account/API key in this environment. If a vendor's
 actual response fields differ from what's coded, the fix is confined to
 that one adapter file — the interface, the tool dispatch layer, and
 everything above it stays untouched. ElevenLabs' adapter is the most
-straightforward of the five (a single synchronous POST returning audio
-bytes) and closely matches their documented API.
+straightforward of the cloud vendors (a single synchronous POST returning
+audio bytes) and closely matches their documented API.
+
+The local-first adapters (TripoSR, TRELLIS, MotionGPT, AudioCraft) define
+their own small local-server wire contract (`POST /generate`, `GET /jobs/:id`)
+rather than mimicking a vendor's public API, because these are self-hosted
+model runtimes without one standardized wire format — the contract is
+intentionally minimal so wrapping the upstream repo's inference call in a
+matching HTTP handler is a short script, not a project. Kokoro and Blender
+are the exceptions: Kokoro-FastAPI already speaks OpenAI's TTS shape, and
+`blender-auto-rig` needs no server at all (a direct CLI invocation). None of
+the local adapters have been run against an actual local inference server in
+this environment (no GPU, no Blender install here) — the graceful-degradation
+tests (`packages/rigging/src/providers/blender-auto-rig.test.ts`,
+`packages/vision/src/ffmpeg.test.ts`) specifically verify the "tool isn't
+installed" path works cleanly, since that's the one guaranteed to be
+exercised by this repo's own CI.
+
+## Free, purely local generation tools (no vendor of any kind)
+
+Not every generative tool needs a model at all. `packages/level-design`,
+`packages/combat-ai`, `packages/shader-synthesis`, and the retargeting
+additions to `packages/rigging` are pure algorithms/codegen — procedural
+level layout, boss behavior trees, ProBuilder graybox export, HLSL shaders,
+post-processing profiles, humanoid avatar mapping, Animator Controller
+specs, and ragdoll configs. These have no `costsMoney` flag, run instantly,
+and need no configuration. See [ARCHITECTURE.md](ARCHITECTURE.md)'s
+"Generation tools" section for the full list.

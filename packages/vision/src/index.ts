@@ -6,3 +6,5 @@ export { buildVideoAnalysisMessage } from "./video-analysis.js";
 export type { VideoAnalysisContext } from "./video-analysis.js";
 export { runBacktest } from "./backtest.js";
 export type { CaptureRecord, BacktestThresholds, BacktestResult } from "./backtest.js";
+export { LiveFrameBuffer } from "./live-frame-stream.js";
+export type { LiveFrame, LiveFrameBufferOptions, LiveFrameBufferStats } from "./live-frame-stream.js";

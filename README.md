@@ -9,8 +9,12 @@ This repository has the Phase 1 foundation (project management,
 provider-agnostic LLM layer, a permission-gated tool system, an agent loop, and a
 desktop UI) built and tested, plus several generative content pipelines
 (3D assets, rigging/animation, procedural levels, boss combat AI, audio/voice,
-video playtesting) pulled forward from later phases as provider-agnostic
-packages. Unity integration itself is still ahead — see [ROADMAP.md](ROADMAP.md).
+video playtesting, shader/material synthesis) pulled forward from later
+phases as provider-agnostic packages — each with **both** a cloud-vendor
+option and a local-first, run-it-yourself option behind the same interface,
+so working entirely offline on your own GPU is an actual capability, not
+just a stated goal. Unity integration itself is still ahead — see
+[ROADMAP.md](ROADMAP.md).
 
 ## What works right now
 
@@ -21,35 +25,43 @@ packages. Unity integration itself is still ahead — see [ROADMAP.md](ROADMAP.m
 4. Type a natural-language instruction.
 5. The agent reads project files, edits them, and runs shell commands — each
    step gated by the permission system for the current mode — and reports back.
-6. The agent can also generate a 3D model, a PBR texture set, an auto-rigged
-   skeleton, a motion clip, or a voice line via a configured external vendor
-   (Meshy, Tripo3D, DeepMotion, ElevenLabs) — these always require your
-   explicit approval first, in every mode, because they cost real money.
-7. The agent can generate a procedural level layout or a boss's combat
-   behavior tree/combo graph entirely locally, for free, no vendor needed.
+6. The agent can generate a 3D model, a PBR texture set, an auto-rigged
+   skeleton, a motion clip, a voice line, or ambient audio via a configured
+   vendor — either a cloud API (Meshy, Tripo3D, DeepMotion, ElevenLabs) or a
+   local model you run yourself (TripoSR, TRELLIS, Blender, MotionGPT,
+   Kokoro, Coqui XTTS-v2, AudioCraft). Either way, these always require your
+   explicit approval first, in every mode.
+7. The agent can generate a procedural level layout, a boss's combat
+   behavior tree/combo graph, ProBuilder graybox geometry, a Unity Animator
+   Controller/humanoid avatar mapping/ragdoll config, an HLSL shader, or a
+   themed post-processing profile — entirely locally, for free, no vendor
+   needed.
 8. Everything is visible in the Tool Activity panel as it happens.
 
 ## Repository layout
 
 ```
 /apps
-  /server       Node/Express + WebSocket backend: hosts the agent, tools, memory,
-                and project scanner; talks REST + WS to the desktop UI.
-  /desktop      React + Vite UI, wrapped in a Tauri shell.
+  /server           Node/Express + WebSocket backend: hosts the agent, tools, memory,
+                    and project scanner; talks REST + WS to the desktop UI.
+  /desktop          React + Vite UI, wrapped in a Tauri shell.
 /packages
-  /shared       Cross-cutting types (ChatMessage, ToolCall, AgentMode, GenerationJob, ...).
-  /llm          LLMProvider interface + Ollama/OpenAI-compatible/Anthropic providers.
-  /assets3d     Text-to-3D + PBR material generation (Meshy, Tripo3D adapters).
-  /rigging      Auto-rigging + AI motion generation (DeepMotion adapter).
-  /audio        AI voice synthesis (ElevenLabs) + soundscape/music-mix generation.
-  /level-design Procedural level/navmesh/lighting generation (pure, no vendor).
-  /combat-ai    Boss behavior-tree/combo-graph generation + hitbox framing (pure).
-  /vision       Video frame extraction, pacing metrics, vision-analysis prompts, backtest.
-  /tools        Read/write/execution/generation tools, workspace sandbox, permission policy.
-  /project      Project scanner + compact context summarizer.
-  /memory       SQLite-backed project memory (node:sqlite, no native build step).
-  /agent        The think -> act -> observe loop tying providers + tools together.
-/docs           Architecture, security, provider, and Unity bridge documentation.
+  /shared           Cross-cutting types (ChatMessage, ToolCall, AgentMode, GenerationJob, ...).
+  /llm              LLMProvider interface + Ollama/OpenAI-compatible/Anthropic providers.
+  /assets3d         Text-to-3D + PBR generation: Meshy/Tripo3D (cloud), TripoSR/TRELLIS (local).
+  /rigging          Auto-rig + motion: Meshy/DeepMotion (cloud), Blender/MotionGPT (local);
+                    + humanoid retargeting, Animator Controller, and ragdoll config generators.
+  /audio            Voice + music: ElevenLabs (cloud), Kokoro/XTTS-v2/AudioCraft (local);
+                    + soundscape/music-mix generation.
+  /level-design     Procedural level/navmesh/lighting/ProBuilder-export generation (pure, no vendor).
+  /combat-ai        Boss behavior-tree/combo-graph generation + hitbox framing (pure).
+  /shader-synthesis HLSL shader / ShaderGraph spec / post-processing profile generation (pure).
+  /vision           Video frame extraction, live frame relay, pacing metrics, vision-analysis, backtest.
+  /tools            Read/write/execution/generation tools, workspace sandbox, permission policy.
+  /project          Project scanner + compact context summarizer.
+  /memory           SQLite-backed project memory (node:sqlite, no native build step).
+  /agent            The think -> act -> observe loop tying providers + tools together.
+/docs               Architecture, security, provider, and Unity bridge documentation.
 ```
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for why it's shaped this way.
@@ -61,7 +73,7 @@ Requirements: Node.js 22+ (for the built-in `node:sqlite` module), npm.
 ```bash
 npm install
 npm run build      # builds all packages
-npm test           # runs the full test suite (114 tests across 30 files, latest count)
+npm test           # runs the full test suite (173 tests across 43 files, latest count)
 ```
 
 ## Running it
@@ -95,24 +107,37 @@ server here.
   Keys are only ever used for outbound requests to that vendor — see
   [SECURITY.md](SECURITY.md) for how they're handled.
 
-## Connecting a generative content vendor
+## Connecting a generative content vendor — cloud or local
 
 Optional — only needed for `generate_3d_model`, `generate_pbr_material`,
-`auto_rig_model`, `generate_motion_clip`, or `generate_voice_line`.
-Currently wired: Meshy and Tripo3D (3D/rigging/texture), DeepMotion (motion),
-ElevenLabs (voice). See [ROADMAP.md](ROADMAP.md)'s "Generative content
-pipelines" section and [PROVIDERS.md](PROVIDERS.md) for how to add another
-vendor. Every one of these tools always requires your explicit approval
-before running, in every agent mode, because it calls a paid external
-service (see SECURITY.md).
+`auto_rig_model`, `generate_motion_clip`, `generate_voice_line`, or
+`generate_ambient_audio`. Every one of these tools always requires your
+explicit approval before running, in every agent mode (see SECURITY.md).
+
+- **Cloud**: Meshy, Tripo3D (3D/rigging/texture), DeepMotion (motion),
+  ElevenLabs (voice) — need an API key.
+- **Local-first** (no account, no cost, runs on your own GPU): TripoSR,
+  TRELLIS (3D), Blender auto-rig, MotionGPT (rigging/motion), Kokoro, Coqui
+  XTTS-v2 (voice), AudioCraft (ambient music/sfx) — need the corresponding
+  model server (or, for Blender, just the `blender` binary) running
+  locally. See [PROVIDERS.md](PROVIDERS.md)'s "Running local-first" section
+  for what each one expects.
+
+The level layout, boss combat design, ProBuilder export, Animator
+Controller/avatar-mapping/ragdoll, and shader/post-processing generators
+need **no vendor of any kind** — see [ROADMAP.md](ROADMAP.md)'s "Generative
+content pipelines" section.
 
 ## Known limitations
 
-- No Unity bridge yet (Phase 7+) — see [UNITY_BRIDGE.md](UNITY_BRIDGE.md).
-- `packages/vision`'s video-analysis pipeline is a tested library, not yet
-  wired into the agent as a tool — it needs a real capture source, which
-  depends on the Unity bridge existing first.
-- API keys (LLM and generation vendors alike) are typed into the UI
+- No Unity bridge yet (Phase 7+) — see [UNITY_BRIDGE.md](UNITY_BRIDGE.md),
+  which now specifies adopting `unity-mcp` as the concrete protocol rather
+  than a from-scratch design.
+- `packages/vision`'s video-analysis pipeline (both static ffmpeg
+  extraction and the real-time `LiveFrameBuffer` relay) is a tested
+  library, not yet wired into the agent as a tool — it needs a real
+  capture source, which depends on the Unity bridge existing first.
+- API keys (LLM and cloud generation vendors alike) are typed into the UI
   per-session; OS keychain-backed storage is not yet wired up (see SECURITY.md).
 - The Tauri shell is scaffolded but not build-verified in this environment
   (missing system webview dependencies) — verified instead via the Vite dev
@@ -120,6 +145,12 @@ service (see SECURITY.md).
 - Streaming responses are implemented in the provider layer but the current UI
   uses the non-streaming `generate()` path; wiring `stream()` into the chat UI
   is a good next increment.
-- The Meshy/Tripo3D/DeepMotion adapters follow each vendor's publicly
-  documented API shape but haven't been exercised against a live account in
-  this environment — see the note in ROADMAP.md.
+- None of the cloud adapters (Meshy, Tripo3D, DeepMotion) or local-first
+  adapters (TripoSR, TRELLIS, Blender, MotionGPT, Kokoro, XTTS-v2,
+  AudioCraft) have been exercised against a live account or a real running
+  local model server in this environment (no GPU, no Blender install here)
+  — see the notes in ROADMAP.md and PROVIDERS.md.
+- The `ShaderGraphSpec` intermediate representation is GameForge's own typed
+  data model, not a byte-exact serialization of Unity's internal
+  `.shadergraph` JSON format — see UNITY_BRIDGE.md for why, and what the
+  alternatives are once there's a real Unity Editor to test against.

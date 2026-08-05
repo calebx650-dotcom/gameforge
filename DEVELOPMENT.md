@@ -15,6 +15,13 @@
   Its absence is handled gracefully (a clear `FfmpegNotAvailableError`, not a
   crash) — this repository's own test/dev environment doesn't have ffmpeg
   installed, which is exactly the path those tests exercise.
+- Optional, for local-first generation instead of a cloud vendor: the
+  `blender` binary on PATH (auto-rigging), and/or a locally-running
+  inference server for whichever local model you want (TripoSR, TRELLIS,
+  MotionGPT, Kokoro, Coqui XTTS-v2, AudioCraft) — see PROVIDERS.md's
+  "Running local-first" section. None of these are required to build, test,
+  or run GameForge itself; they're only needed to actually invoke the
+  corresponding generation tool with a local provider selected.
 
 ## Install
 
@@ -40,12 +47,16 @@ npx vitest run packages/tools   # scope to one package
 npx vitest watch                # watch mode while iterating
 ```
 
-Latest count: 114 tests across 30 files, all passing, including an automated
+Latest count: 173 tests across 43 files, all passing, including an automated
 end-to-end smoke test (`apps/server/src/e2e.test.ts`) that drives the full
 "open project -> list models -> chat -> read file -> edit file -> run
 command -> report" loop against a fake Ollama server, with no external
 services required. The generation-vendor packages (`assets3d`, `rigging`,
-`audio`) are tested the same way — mocked `fetch`, no live vendor calls.
+`audio`) are tested the same way — mocked `fetch`, no live vendor calls. The
+CLI-based local adapters (`BlenderAutoRigProvider`, `packages/vision`'s
+ffmpeg extraction) are tested against this environment's real (lack of)
+installation instead of mocking `child_process`, so the graceful-degradation
+path is genuinely exercised, not just asserted.
 
 ## Running the app locally
 
@@ -87,14 +98,27 @@ come back malformed, try a model explicitly documented as supporting Ollama's
 
 ## Connecting Unity
 
-Not implemented yet — see [UNITY_BRIDGE.md](UNITY_BRIDGE.md) for the planned
-design and [ROADMAP.md](ROADMAP.md) for when it lands (Phase 7+).
+Not implemented yet — see [UNITY_BRIDGE.md](UNITY_BRIDGE.md), which now
+specifies adopting [CoplayDev/unity-mcp](https://github.com/CoplayDev/unity-mcp)
+as the concrete bridge protocol, and [ROADMAP.md](ROADMAP.md) for when it
+lands (Phase 7+).
+
+## Running a local generation model instead of a cloud vendor
+
+See [PROVIDERS.md](PROVIDERS.md)'s "Running local-first" section for what
+each local adapter (TripoSR, TRELLIS, Blender, MotionGPT, Kokoro, XTTS-v2,
+AudioCraft) expects — in short, a small HTTP wrapper around the upstream
+repo's inference call, except Blender (just needs the `blender` binary) and
+Kokoro (the community Kokoro-FastAPI wrapper already speaks the right
+shape). Point the corresponding tool's `baseUrl` setting at wherever that
+server is listening.
 
 ## Adding a new LLM or generation-vendor provider
 
 See [PROVIDERS.md](PROVIDERS.md) — LLM providers and generation-vendor
-providers (3D, rigging, motion, voice) follow the same interface + adapter
-+ registry pattern.
+providers (3D, rigging, motion, voice, music) follow the same interface +
+adapter + registry pattern, whether the new vendor is a cloud API or
+another local model.
 
 ## Project structure conventions
 

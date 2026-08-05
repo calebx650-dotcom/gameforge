@@ -2,6 +2,8 @@ export type { Text3DProvider, Text3DRequest, Text3DResult, MeshStyle, MeshFormat
 export type { PBRMaterialProvider, PBRMaterialRequest, PBRMaterialResult } from "./pbr-material.js";
 export { MeshyProvider } from "./providers/meshy.js";
 export { Tripo3DProvider } from "./providers/tripo3d.js";
+export { TripoSRProvider } from "./providers/triposr.js";
+export { TrellisProvider } from "./providers/trellis.js";
 export { MeshyPBRProvider } from "./providers/meshy-pbr.js";
 export { GenericImagePBRProvider } from "./providers/generic-image-pbr.js";
 export {

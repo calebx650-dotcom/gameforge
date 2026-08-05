@@ -7,7 +7,7 @@ import { ToolExecutor, type GenerationProviders } from "@gameforge/tools";
 import { summarizeProjectContext } from "@gameforge/project";
 import { createText3DProvider, createPBRMaterialProvider, type AssetGenerationSettings } from "@gameforge/assets3d";
 import { createAutoRigProvider, createMotionProvider, type RiggingSettings } from "@gameforge/rigging";
-import { createVoiceProvider, type VoiceSettings } from "@gameforge/audio";
+import { createVoiceProvider, createMusicGenerationProvider, type VoiceSettings } from "@gameforge/audio";
 import type { ProjectManager } from "./project-manager.js";
 
 /**
@@ -22,6 +22,7 @@ interface GenerationSettings {
   autoRig?: RiggingSettings;
   motion?: RiggingSettings;
   voice?: VoiceSettings;
+  music?: VoiceSettings;
 }
 
 interface ChatRequest {
@@ -68,6 +69,11 @@ function buildGenerationProviders(settings: GenerationSettings | undefined): Gen
   } catch {
     /* left unconfigured */
   }
+  try {
+    if (settings.music) providers.music = createMusicGenerationProvider(settings.music);
+  } catch {
+    /* left unconfigured */
+  }
   return providers;
 }
 
@@ -83,10 +89,15 @@ type ClientMessage = ChatRequest | ApprovalResponse | CancelRequest;
 const SYSTEM_PROMPT_BASE = `You are GameForge, an AI pair-programmer embedded in a game-development workstation.
 You have tools to read, search, create, edit, and delete files within the current project, and to run shell commands.
 You also have tools for generative game-content pipelines: 3D model generation, PBR texture generation, auto-rigging,
-AI motion/animation generation, AI voice synthesis, procedural level layout, and boss combat design (behavior tree +
-combo graph). The content-generation tools that call an external vendor always cost money and always require human
-approval before running, regardless of mode — never assume one was approved implicitly. Level layout and boss combat
-design are local, free, and available without any vendor configured.
+AI motion/animation generation, AI voice synthesis, and ambient audio/music generation. Each of these can be backed
+by either a cloud vendor (Meshy, Tripo3D, DeepMotion, ElevenLabs) or a local-first, run-it-yourself model (TripoSR,
+TRELLIS, Blender auto-rig, MotionGPT, Kokoro, Coqui XTTS-v2, AudioCraft) depending on what the user configured this
+session — you don't need to know or care which; the tool call is identical either way. These vendor-backed tools
+always cost money or GPU time and always require human approval before running, regardless of mode — never assume
+one was approved implicitly.
+You also have purely local, free tools that need no vendor at all: procedural level layout, boss combat design
+(behavior tree + combo graph), ProBuilder graybox geometry export, Unity Animator Controller / humanoid avatar
+mapping / ragdoll config generation, and HLSL shader / post-processing profile synthesis.
 Stay within the project workspace. Explain what you changed and why. Ask before doing anything destructive.`;
 
 /**

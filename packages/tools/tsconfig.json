@@ -11,6 +11,7 @@
     { "path": "../rigging" },
     { "path": "../audio" },
     { "path": "../level-design" },
-    { "path": "../combat-ai" }
+    { "path": "../combat-ai" },
+    { "path": "../shader-synthesis" }
   ]
 }

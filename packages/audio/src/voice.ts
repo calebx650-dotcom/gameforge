@@ -8,6 +8,14 @@ export interface VoiceRequest {
   style?: VoiceStyle;
   stability?: number;
   similarityBoost?: number;
+  /**
+   * Optional reference audio (URL or data: URI) for zero-shot voice
+   * cloning vendors like Coqui XTTS-v2. Vendors that use a fixed voice
+   * library (ElevenLabs, Kokoro) ignore this and use `voiceId` instead.
+   */
+  referenceAudioUrl?: string;
+  /** BCP-47 language code, for multilingual local models. Defaults to "en". */
+  language?: string;
 }
 
 export interface VoiceResult {

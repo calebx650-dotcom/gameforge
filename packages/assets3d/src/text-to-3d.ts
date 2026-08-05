@@ -10,6 +10,13 @@ export interface Text3DRequest {
   /** Ask the vendor to also produce a simplified collision/physics mesh alongside the render mesh. */
   generateCollisionMesh?: boolean;
   negativePrompt?: string;
+  /**
+   * Optional source image (URL or data: URI) for image-conditioned local
+   * models like TripoSR, which generate from a single image rather than
+   * text. Text-only vendors ignore this field; `prompt` still doubles as
+   * a caption/label for those that want one.
+   */
+  imageUrl?: string;
 }
 
 export interface Text3DResult {
