@@ -1,4 +1,5 @@
 import type { AgentMode, ToolCall, ToolResultMessage } from "@gameforge/shared";
+import type { EngineBridge } from "@gameforge/engine-bridge";
 import { findToolDefinition } from "./definitions.js";
 import { isDangerousCommand } from "./dangerous-commands.js";
 import {
@@ -14,6 +15,7 @@ import { runCommandTool } from "./exec-tool.js";
 import { decidePermission } from "./permissions.js";
 import type { WorkspaceGuard } from "./workspace.js";
 import { dispatchGenerationTool, isGenerationTool, type GenerationProviders } from "./generation-tools.js";
+import { dispatchEngineTool, isEngineTool } from "./engine-tools.js";
 import { gitStatusTool, gitDiffTool, gitLogTool, gitBranchTool, gitCommitTool } from "./git-tools.js";
 
 export type ApprovalRequest = (call: ToolCall, reason: string) => Promise<boolean>;
@@ -29,6 +31,7 @@ export class ToolExecutor {
     private readonly guard: WorkspaceGuard,
     private readonly requestApproval: ApprovalRequest,
     private readonly generationProviders: GenerationProviders = {},
+    private readonly engineBridge?: EngineBridge,
   ) {}
 
   async execute(call: ToolCall, mode: AgentMode): Promise<ToolResultMessage> {
@@ -111,6 +114,9 @@ export class ToolExecutor {
       default:
         if (isGenerationTool(call.name)) {
           return dispatchGenerationTool(call.name, args, this.generationProviders);
+        }
+        if (isEngineTool(call.name)) {
+          return dispatchEngineTool(call.name, args, this.engineBridge);
         }
         throw new Error(`No implementation registered for tool: ${call.name}`);
     }

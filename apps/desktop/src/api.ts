@@ -91,7 +91,13 @@ export class ChatSocket {
     } else if (msg.type === "error") this.callbacks.onError(msg.message);
   }
 
-  sendChat(input: { projectId: string; mode: AgentMode; providerSettings: ProviderSettings; message: string }): void {
+  sendChat(input: {
+    projectId: string;
+    mode: AgentMode;
+    providerSettings: ProviderSettings;
+    message: string;
+    engineSettings?: { engine: string; url?: string };
+  }): void {
     this.socket.send(JSON.stringify({ type: "chat", ...input }));
   }
 

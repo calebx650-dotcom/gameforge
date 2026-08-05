@@ -122,6 +122,122 @@ describe("Agent", () => {
     expect(result.log.some((e) => e.kind === "error")).toBe(true);
   });
 
+  it("splices an image message after a successful capture_screenshot tool call so the model actually sees the picture", async () => {
+    const root = await makeProject();
+    const fakeBridge = {
+      id: "fake-engine",
+      displayName: "Fake Engine",
+      connect: async () => {},
+      disconnect: async () => {},
+      isConnected: () => true,
+      inspectScene: async () => ({ name: "Scene", objects: [] }),
+      inspectObject: async () => {
+        throw new Error("not used");
+      },
+      createObject: async () => {
+        throw new Error("not used");
+      },
+      modifyObject: async () => {},
+      modifyTransform: async () => {},
+      modifyComponent: async () => {},
+      saveScene: async () => {},
+      enterPlayMode: async () => {},
+      exitPlayMode: async () => {},
+      buildProject: async () => ({ success: true }),
+      captureScreenshot: async () => ({ base64Png: "fakeBase64ImageData" }),
+      readConsole: async () => [],
+    };
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true, {}, fakeBridge as any);
+
+    const receivedMessageSnapshots: unknown[][] = [];
+    class RecordingProvider extends ScriptedProvider {
+      async generate(options: GenerateOptions) {
+        receivedMessageSnapshots.push(structuredClone(options.messages));
+        return super.generate(options);
+      }
+    }
+    const provider = new RecordingProvider([
+      { message: { role: "assistant", content: "" }, toolCalls: [{ id: "1", name: "capture_screenshot", arguments: {} }] },
+      { message: { role: "assistant", content: "I see the screenshot." } },
+    ]);
+
+    const agent = new Agent({ provider, model: "m", systemPrompt: "sys", executor, mode: "build" });
+    const result = await agent.run([{ role: "user", content: "Check how the level looks." }]);
+
+    expect(result.stoppedReason).toBe("completed");
+    // The second generate() call (index 1) should include the spliced-in vision message with the image.
+    const secondCallMessages = receivedMessageSnapshots[1] as Array<{ role: string; content: unknown }>;
+    const visionMessage = secondCallMessages[secondCallMessages.length - 1];
+    expect(visionMessage.role).toBe("user");
+    const parts = visionMessage.content as Array<{ type: string; data?: string }>;
+    expect(parts.some((p) => p.type === "image" && p.data === "fakeBase64ImageData")).toBe(true);
+    expect(result.log.some((e) => e.summary.includes("Attached captured screenshot"))).toBe(true);
+  });
+
+  it("stops with timed_out once the wall-clock budget is exceeded, without waiting for another provider call", async () => {
+    const root = await makeProject();
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+    const alwaysReadFile: GenerateResult = {
+      message: { role: "assistant", content: "" },
+      toolCalls: [{ id: "x", name: "read_file", arguments: { path: "hello.txt" } }],
+    };
+    const provider = new ScriptedProvider([alwaysReadFile]);
+
+    const agent = new Agent({
+      provider,
+      model: "m",
+      systemPrompt: "sys",
+      executor,
+      mode: "build",
+      maxIterations: 1000,
+      maxWallClockMs: 0, // already "expired" by the time the first check runs
+    });
+
+    const result = await agent.run([{ role: "user", content: "loop forever" }]);
+    expect(result.stoppedReason).toBe("timed_out");
+    expect(result.iterations).toBeLessThan(1000); // stopped well short of maxIterations
+  });
+
+  it("stops with file_limit_reached once the file-modification cap is hit, mid-run", async () => {
+    const root = await makeProject();
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+    const provider = new ScriptedProvider([
+      {
+        message: { role: "assistant", content: "" },
+        toolCalls: [
+          { id: "1", name: "edit_file", arguments: { path: "hello.txt", oldText: "hello", newText: "h1" } },
+          { id: "2", name: "edit_file", arguments: { path: "hello.txt", oldText: "h1", newText: "h2" } },
+          { id: "3", name: "edit_file", arguments: { path: "hello.txt", oldText: "h2", newText: "h3" } },
+        ],
+      },
+      { message: { role: "assistant", content: "should never be reached" } },
+    ]);
+
+    const agent = new Agent({ provider, model: "m", systemPrompt: "sys", executor, mode: "build", maxFileModifications: 2 });
+    const result = await agent.run([{ role: "user", content: "make three edits" }]);
+
+    expect(result.stoppedReason).toBe("file_limit_reached");
+    const content = await readFile(join(root, "hello.txt"), "utf-8");
+    expect(content).toBe("h2 world\n"); // third edit_file call never ran
+  });
+
+  it("does not count failed file mutations toward the modification cap", async () => {
+    const root = await makeProject();
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+    const provider = new ScriptedProvider([
+      {
+        message: { role: "assistant", content: "" },
+        toolCalls: [{ id: "1", name: "edit_file", arguments: { path: "hello.txt", oldText: "not-present", newText: "x" } }],
+      },
+      { message: { role: "assistant", content: "done" } },
+    ]);
+
+    const agent = new Agent({ provider, model: "m", systemPrompt: "sys", executor, mode: "build", maxFileModifications: 1 });
+    const result = await agent.run([{ role: "user", content: "try an edit that will fail" }]);
+
+    expect(result.stoppedReason).toBe("completed"); // the failed edit didn't count against the cap
+  });
+
   it("stops immediately when the abort signal is already aborted", async () => {
     const root = await makeProject();
     const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);

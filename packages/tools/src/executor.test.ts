@@ -183,4 +183,63 @@ describe("ToolExecutor", () => {
     expect(wasAskedForApproval).toBe(true);
     expect(result.isError).toBe(true);
   });
+
+  it("allows inspect_scene (a read-only engine tool) without approval, even in ask mode, and reports missing bridge clearly", async () => {
+    const root = await makeProject();
+    let approvalCalled = false;
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => {
+      approvalCalled = true;
+      return true;
+    });
+    const result = await executor.execute({ id: "1", name: "inspect_scene", arguments: {} }, "ask");
+    expect(approvalCalled).toBe(false);
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/No engine bridge configured/);
+  });
+
+  it("denies create_object (a mutating engine tool) in ask mode and requires approval in assist mode", async () => {
+    const root = await makeProject();
+    const denyingExecutor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+    const denied = await denyingExecutor.execute({ id: "1", name: "create_object", arguments: { name: "Cube" } }, "ask");
+    expect(denied.isError).toBe(true);
+    expect(denied.content).toMatch(/not permitted/);
+
+    let wasAskedForApproval = false;
+    const assistExecutor = new ToolExecutor(new WorkspaceGuard(root), async () => {
+      wasAskedForApproval = true;
+      return true;
+    });
+    const result = await assistExecutor.execute({ id: "1", name: "create_object", arguments: { name: "Cube" } }, "assist");
+    expect(wasAskedForApproval).toBe(true);
+    expect(result.isError).toBe(true); // no bridge configured, but approval was still requested first
+  });
+
+  it("dispatches an engine tool call to a configured EngineBridge", async () => {
+    const root = await makeProject();
+    const fakeBridge = {
+      id: "fake",
+      displayName: "Fake",
+      connect: async () => {},
+      disconnect: async () => {},
+      isConnected: () => true,
+      inspectScene: async () => ({ name: "Scene", objects: [] }),
+      inspectObject: async () => {
+        throw new Error("not used");
+      },
+      createObject: async () => ({ path: "/X", name: "X", active: true }),
+      modifyObject: async () => {},
+      modifyTransform: async () => {},
+      modifyComponent: async () => {},
+      saveScene: async () => {},
+      enterPlayMode: async () => {},
+      exitPlayMode: async () => {},
+      buildProject: async () => ({ success: true }),
+      captureScreenshot: async () => ({ base64Png: "abc" }),
+      readConsole: async () => [],
+    };
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true, {}, fakeBridge as any);
+    const result = await executor.execute({ id: "1", name: "inspect_scene", arguments: {} }, "ask");
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(result.content).name).toBe("Scene");
+  });
 });

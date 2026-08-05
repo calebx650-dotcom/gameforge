@@ -27,35 +27,68 @@ should be working and tested before the next starts.
 - [x] **Phase 6** — Project memory/context system (`packages/memory`,
       SQLite via `node:sqlite`; compact project context summary via
       `packages/project`).
-- [ ] **Phase 7** — Unity `GameForgeBridge` (see [UNITY_BRIDGE.md](UNITY_BRIDGE.md)
-      for the planned design — not yet implemented).
-- [ ] **Phase 8** — Unity inspection/control (scene/object/component tools).
-- [ ] **Phase 9** — Build/run/test loop (Unity build triggers, editor play
-      mode control).
-- [~] **Phase 10** — Screenshot capture + vision analysis. Multimodal
-      `ContentPart` plumbing already exists in `packages/shared` and is
-      wired into the OpenAI-compatible and Anthropic providers. The video
-      half of this phase has been pulled forward and built as
-      **`packages/vision`**: ffmpeg-based frame extraction (with a clear
-      error and graceful degradation when ffmpeg isn't installed), a
-      `LiveFrameBuffer` in-memory ring buffer for real-time frame streaming
-      (drop-oldest backpressure, zero disk writes — the practical
-      local-first substitute for true Spout2/NDI GPU-memory sharing, which
-      needs a native Unity-side plugin out of scope here), objective
-      frame-pacing/jitter metrics, a multi-frame vision-analysis prompt
-      builder (`buildVideoAnalysisMessage`) covering motion
-      smoothness/pacing/jitter/combo-timing, and a `runBacktest` comparator
-      for regression-testing gameplay feel against a stored baseline. What's
-      still missing: an actual capture *source* — there's no Unity bridge
-      yet to record gameplay from, so `packages/vision` is a tested,
-      ready-to-wire library, not yet an agent tool (see UNITY_BRIDGE.md).
-- [~] **Phase 11** — Autonomous development loop. Iteration cap and
-      cancellation (`AbortSignal`) were already in place; rollback now has
-      its foundation via Phase 5's checkpoint commits and the restore
-      endpoint. Still missing: max command execution *time* and filesystem
-      restrictions beyond the current per-command timeout and
-      `WorkspaceGuard` root restriction (i.e., finer-grained limits within
-      a single autonomous run, not just at the tool-call level).
+- [x] **Phase 7** — Engine bridge (generalized beyond just Unity — see
+      [UNITY_BRIDGE.md](UNITY_BRIDGE.md) for the design rationale).
+      `packages/engine-bridge` implements `EngineBridge` — a
+      connect/inspect/create/modify/play/build/screenshot/console
+      interface any engine automation surface can sit behind — plus:
+      `McpHttpClient`, a real MCP (Model Context Protocol) JSON-RPC-over-HTTP
+      client (`tools/list`, `tools/call` — the actual wire format, not a
+      guess); `UnityBridge`, mapping those generic verbs onto
+      `unity-mcp`'s tool set (`manage_scene`, `manage_gameobject`,
+      `manage_editor`, `read_console`); and `GodotBridge`, a second
+      implementation over GameForge's own WebSocket command protocol,
+      proving the abstraction isn't secretly Unity-shaped. Both are unit
+      tested against fake local servers (a real `ws` `WebSocketServer` fake
+      for Godot, a real JSON-RPC responder for Unity) — neither has been
+      run against a real Unity Editor + `unity-mcp` install or a real Godot
+      Editor + bridge plugin, since neither engine is installed in this
+      environment. The Godot-side EditorPlugin and any future Unity C#
+      package changes are out of scope for this TypeScript codebase to
+      write or test.
+- [x] **Phase 8** — Unity/engine inspection/control. Twelve tool
+      definitions (`inspect_scene`, `inspect_object`, `create_object`,
+      `modify_object`, `modify_transform`, `modify_component`, `save_scene`,
+      `enter_play_mode`, `exit_play_mode`, `build_project`,
+      `capture_screenshot`, `read_console`) are real agent tools in
+      `packages/tools/src/engine-tools.ts`, dispatched through the same
+      `ToolExecutor` permission path as every other tool — inspection/
+      console-reading is read-only and always allowed, everything else is
+      mode-gated like any other write. `ToolExecutor` connects lazily to
+      whichever `EngineBridge` the session configured.
+- [x] **Phase 9** — Build/run/test loop. `build_project`, `enter_play_mode`,
+      `exit_play_mode` are part of the same tool set above, going through
+      the same `EngineBridge`.
+- [x] **Phase 10** — Screenshot capture + vision analysis, actually wired
+      into the agent loop. `packages/vision`'s ffmpeg-based extraction,
+      `LiveFrameBuffer` real-time ring buffer (the local-first substitute
+      for Spout2/NDI GPU-memory sharing — a native Unity-side sender plugin
+      is out of scope here), frame-pacing metrics, and `runBacktest`
+      comparator are all still available as a library. What's new: after a
+      successful `capture_screenshot` tool call, `Agent.run()` splices an
+      additional message — the actual image plus a vision-analysis prompt
+      (`buildVideoAnalysisMessage`) — into the conversation, so the *next*
+      `generate()` call gives the model something to look at instead of an
+      opaque JSON blob. Verified end-to-end in `apps/server/src/e2e.test.ts`
+      against a fake unity-mcp server: a real WebSocket chat request drives
+      `capture_screenshot` through a real `EngineBridge`, and the test
+      confirms the image genuinely lands in the next provider call.
+- [x] **Phase 11** — Autonomous development loop hardening.
+      `Agent.run()` now takes `maxWallClockMs` (checked between iterations;
+      a single slow tool call can still run past the budget, but no new
+      iteration starts after it) and `maxFileModifications` (counts
+      successful `create_file`/`edit_file`/`delete_file` calls only — a
+      failed edit doesn't count against the cap), each producing a new,
+      distinct `stoppedReason` (`"timed_out"` / `"file_limit_reached"`) so
+      the caller can tell a safety stop from a normal completion.
+      `apps/server` applies conservative defaults (30 minutes,
+      50 file modifications) automatically whenever `mode === "autonomous"`,
+      overridable per request. Rollback was already covered by Phase 5's
+      checkpoint commits and restore endpoint. What's still open: filesystem
+      restrictions *within* a single run beyond `WorkspaceGuard`'s root
+      restriction (e.g., a per-run allowlist of directories) — not built,
+      since the project-root sandbox already bounds the worst case and a
+      finer-grained scheme didn't have an obvious design to commit to yet.
 
 ## Generative content pipelines (pulled forward from later phases)
 
@@ -144,12 +177,20 @@ pattern.
   MotionGPT, Kokoro, XTTS-v2, AudioCraft) have been run against an actual
   local inference server in this environment (no GPU, no Blender install
   here) — see PROVIDERS.md's "Running local-first" section.
-- `packages/vision`'s video pipeline (both the ffmpeg static-extraction
-  path and the `LiveFrameBuffer` real-time path) isn't wired into the agent
-  as a tool yet — see Phase 10 above.
-- The Unity engine-assembly translation layer (`generateProBuilderCommands`,
-  the Animator Controller/humanoid-mapping/ragdoll generators, the
-  `ShaderGraphSpec` IR) produces data a Unity-side script would consume —
-  none of it has been run against an actual Unity Editor, since there is no
-  Unity install in this environment. See UNITY_BRIDGE.md's adoption of
-  `unity-mcp` as the concrete bridge protocol.
+- `packages/vision`'s screenshot-analysis path is wired into the agent loop
+  (Phase 10). The ffmpeg static-extraction path and the `LiveFrameBuffer`
+  real-time ring buffer are still library-only — nothing currently drives
+  them as agent tools, since the agent's own screenshot capture goes
+  through `EngineBridge.captureScreenshot()` instead.
+- The Unity/Godot engine bridges (Phase 7-9) are unit-tested against fake
+  local servers only — neither has been run against a real Unity Editor +
+  `unity-mcp` install or a real Godot Editor + bridge plugin, since neither
+  engine is installed in this environment. The Unity engine-assembly
+  translation layer (`generateProBuilderCommands`, the Animator Controller/
+  humanoid-mapping/ragdoll generators, the `ShaderGraphSpec` IR) produces
+  data those bridges' `create_object`/`modify_component` calls would need
+  to consume on the Unity/Godot side — still unverified against a real
+  Editor for the same reason. See UNITY_BRIDGE.md.
+- Autonomous-mode per-run filesystem restrictions beyond `WorkspaceGuard`'s
+  project-root sandbox (e.g., a per-run directory allowlist) — not built,
+  see Phase 11 above.

@@ -139,6 +139,126 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: "inspect_scene",
+    description: "List the current engine scene's hierarchy (object paths, names, active state). Read-only.",
+    category: "engine",
+    mutating: false,
+    parameters: { type: "object", properties: {} },
+  },
+  {
+    name: "inspect_object",
+    description: "Get full detail (transform, components) for one scene object by path. Read-only.",
+    category: "engine",
+    mutating: false,
+    parameters: {
+      type: "object",
+      properties: { path: { type: "string" } },
+      required: ["path"],
+    },
+  },
+  {
+    name: "create_object",
+    description: "Create a new object in the current engine scene.",
+    category: "engine",
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        parentPath: { type: "string" },
+        primitive: { type: "string", description: "Engine-provided primitive to start from, e.g. 'cube', 'sphere', 'empty'" },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "modify_object",
+    description: "Rename or toggle active state of a scene object by path.",
+    category: "engine",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        name: { type: "string" },
+        active: { type: "boolean" },
+      },
+      required: ["path"],
+    },
+  },
+  {
+    name: "modify_transform",
+    description: "Set position/rotation/scale on a scene object by path.",
+    category: "engine",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        position: { type: "object", properties: { x: { type: "number" }, y: { type: "number" }, z: { type: "number" } } },
+        rotationEuler: { type: "object", properties: { x: { type: "number" }, y: { type: "number" }, z: { type: "number" } } },
+        scale: { type: "object", properties: { x: { type: "number" }, y: { type: "number" }, z: { type: "number" } } },
+      },
+      required: ["path"],
+    },
+  },
+  {
+    name: "modify_component",
+    description: "Set properties on a component/node attached to a scene object by path.",
+    category: "engine",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        componentType: { type: "string" },
+        properties: { type: "object" },
+      },
+      required: ["path", "componentType"],
+    },
+  },
+  {
+    name: "save_scene",
+    description: "Save the current engine scene.",
+    category: "engine",
+    parameters: { type: "object", properties: {} },
+  },
+  {
+    name: "enter_play_mode",
+    description: "Enter play mode in the engine editor.",
+    category: "engine",
+    parameters: { type: "object", properties: {} },
+  },
+  {
+    name: "exit_play_mode",
+    description: "Exit play mode in the engine editor.",
+    category: "engine",
+    parameters: { type: "object", properties: {} },
+  },
+  {
+    name: "build_project",
+    description: "Trigger a build of the current engine project.",
+    category: "engine",
+    parameters: {
+      type: "object",
+      properties: { target: { type: "string", description: "Engine-specific build target name" } },
+    },
+  },
+  {
+    name: "capture_screenshot",
+    description:
+      "Capture a screenshot of the running game/scene view for visual inspection. The image is automatically shown to you in the next turn.",
+    category: "engine",
+    mutating: false,
+    parameters: { type: "object", properties: {} },
+  },
+  {
+    name: "read_console",
+    description: "Read recent engine console messages (log/warning/error). Read-only.",
+    category: "engine",
+    mutating: false,
+    parameters: {
+      type: "object",
+      properties: { maxMessages: { type: "number", description: "Defaults to 50" } },
+    },
+  },
+  {
     name: "generate_3d_model",
     description:
       "Generate a 3D model (mesh, with an optional collision mesh) from a text prompt via a configured text-to-3D vendor (e.g. Meshy, Tripo3D). Costs money — always requires approval.",

@@ -84,6 +84,45 @@ instance server-side — they're never included in the tool call arguments
 the model sees, the system prompt, or the operation log, the same handling
 as the primary LLM's API key described below.
 
+## Engine bridge tools
+
+`packages/tools/src/engine-tools.ts`'s twelve tools go through the exact same
+`decidePermission()` path as any other tool, split by mutation:
+`inspect_scene`, `inspect_object`, `read_console` are read-only (`mutating:
+false`) and always allowed. `create_object`, `modify_object`,
+`modify_transform`, `modify_component`, `save_scene`, `enter_play_mode`,
+`exit_play_mode`, `build_project`, and `capture_screenshot` are treated as
+ordinary writes — denied in `ask`, requiring approval in `assist`, allowed in
+`build`/`autonomous`. `capture_screenshot` is mutating only in the sense that
+it changes the engine's play-mode/viewport state to grab a frame; it doesn't
+touch project files.
+
+The engine bridge's trust boundary is the URL a session configures
+(`engineSettings: { engine, url }` on the WebSocket `chat` request) — by
+default `http://127.0.0.1:6400` (Unity/`unity-mcp`) or
+`ws://127.0.0.1:6401` (Godot), always a local process the user started
+themselves, never a remote endpoint GameForge reaches out to on its own.
+There is no authentication on that connection beyond "something is listening
+on the configured local port" — the same trust level as `run_command`
+talking to the local shell. Nothing about the bridge grants the model access
+beyond what the connected `unity-mcp`/Godot-plugin process itself exposes.
+
+After a successful `capture_screenshot`, the agent loop splices the actual
+returned image into the next model turn (see ARCHITECTURE.md's "Agent loop"
+section) — this is a one-way flow (engine state -> model), it does not open
+any new write surface.
+
+## Autonomous-mode limits
+
+`Agent.run()`'s `maxWallClockMs` and `maxFileModifications` (Phase 11) bound
+how long and how much an unattended `autonomous`-mode run can do before
+stopping on its own, independent of the per-call approval gates above.
+`apps/server` applies defaults of 30 minutes / 50 file modifications
+whenever `mode === "autonomous"`. These are safety backstops, not a
+replacement for the mode-gating and dangerous-command checks — a single
+tool call inside the budget is still subject to every control described
+elsewhere in this document.
+
 ## Dangerous command detection
 
 `packages/tools/src/dangerous-commands.ts` is a **heuristic**, not a sandbox:

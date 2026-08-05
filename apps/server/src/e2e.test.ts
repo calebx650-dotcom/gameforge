@@ -197,4 +197,111 @@ describe("GameForge end-to-end smoke test", () => {
     const { stdout } = await execFileAsync("git", ["log", "--oneline"], { cwd: gitProjectRoot });
     expect(stdout).toMatch(/GameForge checkpoint/);
   });
+
+  it("drives capture_screenshot through a real engine bridge and splices the image for vision analysis (Phase 7-10 end to end)", async () => {
+    const httpBase = `http://localhost:${gfPort}`;
+
+    // A dedicated, self-contained fake model server for this test (rather
+    // than reusing the shared fakeOllama, whose scripted step counter has
+    // already been consumed by the earlier tests in this file) so the
+    // exact tool-call sequence — including capture_screenshot — is
+    // fully controlled.
+    let modelStep = 0;
+    const modelScript = [
+      { message: { content: "", tool_calls: [{ function: { name: "capture_screenshot", arguments: {} } }] } },
+      { message: { content: "I can see the screenshot: the scene looks correct." } },
+    ];
+    const fakeModel = createHttpServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        if (req.url === "/api/tags") {
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ models: [{ name: "llama3.1:8b" }] }));
+          return;
+        }
+        if (req.url === "/api/chat") {
+          const next = modelScript[Math.min(modelStep, modelScript.length - 1)];
+          modelStep++;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ ...next, prompt_eval_count: 5, eval_count: 5 }));
+          return;
+        }
+        res.statusCode = 404;
+        res.end();
+      });
+    });
+    await new Promise<void>((resolve) => fakeModel.listen(0, resolve));
+    const fakeModelPort = (fakeModel.address() as AddressInfo).port;
+
+    // A fake unity-mcp server speaking the real MCP JSON-RPC-over-HTTP shape.
+    const fakeUnityMcp = createHttpServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        const rpc = JSON.parse(body);
+        res.setHeader("Content-Type", "application/json");
+        if (rpc.method === "tools/list") {
+          res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: { tools: [{ name: "capture_screenshot" }] } }));
+          return;
+        }
+        if (rpc.method === "tools/call" && rpc.params.name === "capture_screenshot") {
+          res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: { content: [{ type: "image", text: "fakeScreenshotBase64" }] } }));
+          return;
+        }
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, error: { message: "unhandled tool call in test" } }));
+      });
+    });
+    await new Promise<void>((resolve) => fakeUnityMcp.listen(0, resolve));
+    const fakeUnityMcpPort = (fakeUnityMcp.address() as AddressInfo).port;
+
+    try {
+      const screenshotProjectRoot = await mkdtemp(join(tmpdir(), "gf-e2e-vision-"));
+      const openRes = await request(httpBase).post("/api/projects").send({ path: screenshotProjectRoot });
+      const projectId = openRes.body.id;
+
+      const result = await new Promise<{ finalText: string; sawImageInSecondCall: boolean }>((resolve, reject) => {
+        const ws = new WebSocket(`ws://localhost:${gfPort}/ws/chat`);
+        const timeout = setTimeout(() => reject(new Error("vision e2e timed out")), 10_000);
+
+        ws.on("open", () => {
+          ws.send(
+            JSON.stringify({
+              type: "chat",
+              projectId,
+              mode: "build",
+              providerSettings: { provider: "ollama", model: "llama3.1:8b", baseUrl: `http://127.0.0.1:${fakeModelPort}` },
+              engineSettings: { engine: "unity", url: `http://127.0.0.1:${fakeUnityMcpPort}` },
+              message: "Take a screenshot and tell me if the scene looks right.",
+            }),
+          );
+        });
+
+        ws.on("message", (raw) => {
+          const msg = JSON.parse(raw.toString());
+          if (msg.type === "result") {
+            clearTimeout(timeout);
+            const finalMessage = msg.messages[msg.messages.length - 1];
+            // The message right before the final assistant response should be
+            // the spliced-in vision message carrying the actual image.
+            const visionMessage = msg.messages[msg.messages.length - 2];
+            const sawImageInSecondCall =
+              Array.isArray(visionMessage?.content) &&
+              visionMessage.content.some((part: { type: string; data?: string }) => part.type === "image" && part.data === "fakeScreenshotBase64");
+            ws.close();
+            resolve({ finalText: finalMessage.content, sawImageInSecondCall });
+          } else if (msg.type === "error") {
+            clearTimeout(timeout);
+            reject(new Error(msg.message));
+          }
+        });
+      });
+
+      expect(result.sawImageInSecondCall).toBe(true);
+      expect(result.finalText).toContain("scene looks correct");
+    } finally {
+      await new Promise((resolve) => fakeModel.close(resolve));
+      await new Promise((resolve) => fakeUnityMcp.close(resolve));
+    }
+  });
 });

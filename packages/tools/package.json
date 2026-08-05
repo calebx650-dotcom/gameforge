@@ -15,6 +15,7 @@
     "@gameforge/audio": "*",
     "@gameforge/level-design": "*",
     "@gameforge/combat-ai": "*",
-    "@gameforge/shader-synthesis": "*"
+    "@gameforge/shader-synthesis": "*",
+    "@gameforge/engine-bridge": "*"
   }
 }

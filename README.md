@@ -5,16 +5,21 @@ it's an orchestration layer that sits on top of game engines and dev tools, lets
 you drive development with natural language, and stays independent of any single
 AI vendor.
 
-This repository has the Phase 1 foundation (project management,
-provider-agnostic LLM layer, a permission-gated tool system, an agent loop, and a
-desktop UI) built and tested, plus several generative content pipelines
-(3D assets, rigging/animation, procedural levels, boss combat AI, audio/voice,
-video playtesting, shader/material synthesis) pulled forward from later
-phases as provider-agnostic packages — each with **both** a cloud-vendor
-option and a local-first, run-it-yourself option behind the same interface,
-so working entirely offline on your own GPU is an actual capability, not
-just a stated goal. Unity integration itself is still ahead — see
-[ROADMAP.md](ROADMAP.md).
+This repository has the full Phase 0-11 roadmap built and tested: project
+management, a provider-agnostic LLM layer, a permission-gated tool system,
+an agent loop, a desktop UI, git integration with checkpoint/restore, an
+engine-agnostic `EngineBridge` (Unity via `unity-mcp`, Godot via a custom
+WebSocket protocol) with scene/object/play-mode/build/screenshot tools,
+screenshot-to-vision-analysis wired into the agent loop, and autonomous-mode
+safety limits (wall-clock timeout, file-modification cap) — plus several
+generative content pipelines (3D assets, rigging/animation, procedural
+levels, boss combat AI, audio/voice, video playtesting, shader/material
+synthesis) pulled forward from later phases as provider-agnostic packages —
+each with **both** a cloud-vendor option and a local-first, run-it-yourself
+option behind the same interface, so working entirely offline on your own
+GPU is an actual capability, not just a stated goal. Neither engine bridge
+has been run against a real Editor in this environment — see
+[ROADMAP.md](ROADMAP.md) and [UNITY_BRIDGE.md](UNITY_BRIDGE.md).
 
 ## What works right now
 
@@ -42,6 +47,15 @@ just a stated goal. Unity integration itself is still ahead — see
    dirty working tree, so a bad run always has a fallback — the desktop UI's
    Git panel shows status, diffs, and a one-click "Restore" per checkpoint.
 9. Everything is visible in the Tool Activity panel as it happens.
+10. Connect an engine bridge (Unity via `unity-mcp`, or Godot via GameForge's
+    own WebSocket bridge) from the desktop UI's "Engine Bridge" panel, and
+    the agent gains scene inspection, object creation/modification, play
+    mode, build, screenshot, and console-reading tools. After a screenshot,
+    the captured image is spliced into the agent's next turn so a
+    vision-capable model actually sees it, not just a JSON description of it.
+11. In `autonomous` mode, runs are bounded by a wall-clock timeout and a
+    file-modification cap (30 minutes / 50 files by default) so an unattended
+    run can't run forever or rewrite the whole project unsupervised.
 
 ## Repository layout
 
@@ -62,7 +76,8 @@ just a stated goal. Unity integration itself is still ahead — see
   /combat-ai        Boss behavior-tree/combo-graph generation + hitbox framing (pure).
   /shader-synthesis HLSL shader / ShaderGraph spec / post-processing profile generation (pure).
   /vision           Video frame extraction, live frame relay, pacing metrics, vision-analysis, backtest.
-  /tools            Read/write/execution/generation tools, workspace sandbox, permission policy.
+  /engine-bridge    EngineBridge interface + UnityBridge (MCP/HTTP) + GodotBridge (WebSocket).
+  /tools            Read/write/execution/generation/git/engine tools, workspace sandbox, permission policy.
   /project          Project scanner + compact context summarizer.
   /memory           SQLite-backed project memory (node:sqlite, no native build step).
   /agent            The think -> act -> observe loop tying providers + tools together.
@@ -78,7 +93,7 @@ Requirements: Node.js 22+ (for the built-in `node:sqlite` module), npm.
 ```bash
 npm install
 npm run build      # builds all packages
-npm test           # runs the full test suite (194 tests across 44 files, latest count)
+npm test           # runs the full test suite (233 tests across 48 files, latest count)
 ```
 
 ## Running it
@@ -135,13 +150,16 @@ content pipelines" section.
 
 ## Known limitations
 
-- No Unity bridge yet (Phase 7+) — see [UNITY_BRIDGE.md](UNITY_BRIDGE.md),
-  which now specifies adopting `unity-mcp` as the concrete protocol rather
-  than a from-scratch design.
-- `packages/vision`'s video-analysis pipeline (both static ffmpeg
-  extraction and the real-time `LiveFrameBuffer` relay) is a tested
-  library, not yet wired into the agent as a tool — it needs a real
-  capture source, which depends on the Unity bridge existing first.
+- Neither `UnityBridge` nor `GodotBridge` (`packages/engine-bridge`) has
+  been run against a real Unity Editor + `unity-mcp` install or Godot
+  Editor + bridge plugin — both are unit-tested against fake local servers
+  only, since neither engine is installed in this environment. See
+  [UNITY_BRIDGE.md](UNITY_BRIDGE.md).
+- `packages/vision`'s screenshot-analysis path is wired into the agent loop
+  (via `EngineBridge.captureScreenshot()`); the static ffmpeg frame
+  extraction path and the real-time `LiveFrameBuffer` relay remain
+  library-only, since nothing yet drives a video file or a live frame
+  stream as an agent tool.
 - API keys (LLM and cloud generation vendors alike) are typed into the UI
   per-session; OS keychain-backed storage is not yet wired up (see SECURITY.md).
 - The Tauri shell is scaffolded but not build-verified in this environment
@@ -159,3 +177,6 @@ content pipelines" section.
   data model, not a byte-exact serialization of Unity's internal
   `.shadergraph` JSON format — see UNITY_BRIDGE.md for why, and what the
   alternatives are once there's a real Unity Editor to test against.
+- Autonomous-mode's `maxWallClockMs`/`maxFileModifications` are the only
+  per-run safety limits; there's no finer-grained per-run filesystem
+  allowlist beyond `WorkspaceGuard`'s project-root sandbox yet.

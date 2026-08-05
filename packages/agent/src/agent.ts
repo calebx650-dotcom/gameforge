@@ -1,6 +1,7 @@
 import type { AgentMode, ChatMessage, OperationLogEntry, ToolCall } from "@gameforge/shared";
 import type { LLMProvider } from "@gameforge/llm";
 import { TOOL_DEFINITIONS, ToolExecutor } from "@gameforge/tools";
+import { buildVideoAnalysisMessage } from "@gameforge/vision";
 
 export interface AgentOptions {
   provider: LLMProvider;
@@ -11,6 +12,21 @@ export interface AgentOptions {
   mode: AgentMode;
   /** Hard cap on think/act cycles for a single run(), regardless of mode. */
   maxIterations?: number;
+  /**
+   * Hard cap on total wall-clock time for a single run(), regardless of
+   * mode — primarily meant for autonomous mode, where nothing else stops
+   * a run that keeps finding tool calls to make. Checked between
+   * iterations, not mid-tool-call (a single slow tool call can still run
+   * past this budget; it will simply be the last one).
+   */
+  maxWallClockMs?: number;
+  /**
+   * Hard cap on the number of successful file mutations (create_file/
+   * edit_file/delete_file) in a single run() — a second, independent lever
+   * from maxIterations for bounding how much of the project an autonomous
+   * run can touch before stopping to check in.
+   */
+  maxFileModifications?: number;
   temperature?: number;
   maxOutputTokens?: number;
   onLogEntry?: (entry: OperationLogEntry) => void;
@@ -21,10 +37,11 @@ export interface AgentRunResult {
   messages: ChatMessage[];
   log: OperationLogEntry[];
   iterations: number;
-  stoppedReason: "completed" | "max_iterations" | "cancelled";
+  stoppedReason: "completed" | "max_iterations" | "cancelled" | "timed_out" | "file_limit_reached";
 }
 
 const DEFAULT_MAX_ITERATIONS = 10;
+const MUTATING_FILE_TOOLS = new Set(["create_file", "edit_file", "delete_file"]);
 
 /**
  * Drives the think -> act -> observe loop: ask the model for the next
@@ -35,6 +52,7 @@ const DEFAULT_MAX_ITERATIONS = 10;
  */
 export class Agent {
   private readonly log: OperationLogEntry[] = [];
+  private fileModificationCount = 0;
 
   constructor(private readonly options: AgentOptions) {}
 
@@ -44,10 +62,19 @@ export class Agent {
       ...conversation,
     ];
     const maxIterations = this.options.maxIterations ?? DEFAULT_MAX_ITERATIONS;
+    const startedAt = Date.now();
 
     for (let iteration = 1; iteration <= maxIterations; iteration++) {
       if (this.options.signal?.aborted) {
         return { messages, log: this.log, iterations: iteration - 1, stoppedReason: "cancelled" };
+      }
+      if (this.options.maxWallClockMs != null && Date.now() - startedAt > this.options.maxWallClockMs) {
+        this.record({
+          timestamp: Date.now(),
+          kind: "error",
+          summary: `Stopped: exceeded wall-clock limit of ${this.options.maxWallClockMs}ms.`,
+        });
+        return { messages, log: this.log, iterations: iteration - 1, stoppedReason: "timed_out" };
       }
 
       const result = await this.options.provider.generate({
@@ -74,6 +101,14 @@ export class Agent {
 
       for (const call of result.toolCalls) {
         await this.executeAndRecord(call, messages);
+        if (this.options.maxFileModifications != null && this.fileModificationCount >= this.options.maxFileModifications) {
+          this.record({
+            timestamp: Date.now(),
+            kind: "error",
+            summary: `Stopped: reached the limit of ${this.options.maxFileModifications} file modification(s) for this run.`,
+          });
+          return { messages, log: this.log, iterations: iteration, stoppedReason: "file_limit_reached" };
+        }
       }
     }
 
@@ -90,6 +125,42 @@ export class Agent {
       summary: toolResult.isError ? `${call.name} failed: ${toolResult.content}` : `${call.name} succeeded`,
       detail: toolResult,
     });
+
+    if (!toolResult.isError && MUTATING_FILE_TOOLS.has(call.name)) {
+      this.fileModificationCount++;
+    }
+
+    if (call.name === "capture_screenshot" && !toolResult.isError) {
+      this.spliceScreenshotForAnalysis(toolResult.content, messages);
+    }
+  }
+
+  /**
+   * capture_screenshot's tool result is just JSON metadata (a
+   * ToolResultMessage's content is always a string) — the model can't
+   * "see" the picture from that alone. Right after the tool result, this
+   * appends a separate user-role message carrying the actual image plus a
+   * vision-analysis prompt (packages/vision's buildVideoAnalysisMessage),
+   * so the very next generate() call gives the model something to look
+   * at instead of just a filename. This is what turns "capture a
+   * screenshot" into an actual visual feedback loop rather than a tool
+   * call that produces an opaque blob the model never sees.
+   */
+  private spliceScreenshotForAnalysis(toolResultContent: string, messages: ChatMessage[]): void {
+    let base64Png: string | undefined;
+    try {
+      base64Png = JSON.parse(toolResultContent).base64Png;
+    } catch {
+      return;
+    }
+    if (!base64Png) return;
+
+    const visionMessage = buildVideoAnalysisMessage([{ base64Png }], {
+      label: "engine screenshot",
+      focus: "whatever the current task is asking you to verify or change",
+    });
+    messages.push(visionMessage);
+    this.record({ timestamp: Date.now(), kind: "message", summary: "Attached captured screenshot for visual analysis" });
   }
 
   private record(entry: OperationLogEntry): void {

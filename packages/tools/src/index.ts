@@ -20,3 +20,4 @@ export {
   InvalidCommitReferenceError,
 } from "./git-tools.js";
 export type { GitStatusResult, GitLogEntry, GitBranchResult, GitCommitResult, CheckpointResult } from "./git-tools.js";
+export { dispatchEngineTool, isEngineTool, ENGINE_TOOL_NAMES } from "./engine-tools.js";

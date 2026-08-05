@@ -54,10 +54,13 @@ packages/combat-ai       <- boss behavior-tree/combo-graph + hitbox framing (pur
 packages/shader-synthesis <- HLSL shader / ShaderGraph spec / post-processing profile generation (pure, no vendor)
 packages/vision          <- video frame extraction, live frame relay, pacing metrics, vision-analysis
                             prompt builder, backtest
-packages/tools           <- WorkspaceGuard, permission policy, tool implementations (incl. generation tools)
+packages/engine-bridge   <- EngineBridge interface (connect/inspect/create/modify/play/build/
+                            screenshot/console) + UnityBridge (MCP/HTTP) + GodotBridge (WebSocket)
+packages/tools           <- WorkspaceGuard, permission policy, tool implementations (incl. generation
+                            + git + engine tools)
 packages/project         <- project scanner + compact context summary
 packages/memory          <- SQLite-backed project memory
-packages/agent           <- the think/act/observe loop; depends on llm + tools + shared
+packages/agent           <- the think/act/observe loop; depends on llm + tools + shared + vision
 apps/server              <- wires all packages together behind REST/WS
 apps/desktop             <- React UI + Tauri shell; talks to apps/server only
 ```
@@ -199,6 +202,47 @@ Two more pieces exist outside the agent's tool set entirely, both in
   a hard reset is destructive enough that it shouldn't be one model decision
   away, approved or not.
 
+## Engine bridge (`packages/engine-bridge`)
+
+`EngineBridge` is an engine-agnostic interface — `connect`/`isConnected`/
+`inspectScene`/`inspectObject`/`createObject`/`modifyObject`/
+`modifyTransform`/`modifyComponent`/`saveScene`/`enterPlayMode`/
+`exitPlayMode`/`buildProject`/`captureScreenshot`/`readConsole` — with two
+implementations proving the abstraction is real, not secretly shaped around
+one engine:
+
+- `UnityBridge` talks to a locally-running `unity-mcp` server via
+  `McpHttpClient`, a real MCP JSON-RPC-over-HTTP client (`tools/list`,
+  `tools/call`), mapping the generic verbs onto `unity-mcp`'s tool set
+  (`manage_scene`, `manage_gameobject`, `manage_editor`, `read_console`,
+  `capture_screenshot`). Default `http://127.0.0.1:6400`.
+- `GodotBridge` talks to a bridge plugin over a *different* transport
+  entirely — a raw WebSocket carrying `{id, command, args}` requests and
+  `{id, result|error}` responses (`GodotWsClient`), with Godot-flavored
+  command names (`scene.get_hierarchy`, `editor.play`). Default
+  `ws://127.0.0.1:6401`.
+- `createEngineBridge(settings)` in `registry.ts` is the factory, mirroring
+  `packages/llm`'s `createProvider(settings)` pattern exactly.
+
+`packages/tools/src/engine-tools.ts` exposes twelve `EngineBridge` methods
+as real agent tools (`ENGINE_TOOL_NAMES`), dispatched by `ToolExecutor`
+through `dispatchEngineTool(name, args, bridge)` — connecting lazily on
+first use. Inspection/console-reading tools are non-mutating and always
+allowed; everything else (`create_object`, `modify_*`, `save_scene`,
+`enter_play_mode`/`exit_play_mode`, `build_project`) follows the same
+mode-gated `write` path as any other mutating tool. `apps/server`'s chat
+handler builds the bridge per-session from a `engineSettings: { engine, url }`
+field on the WebSocket `chat` request and passes it into `ToolExecutor`'s
+constructor, the same shape as `providerSettings`/`generationSettings`.
+`apps/desktop`'s "Engine Bridge" panel is the UI for picking `unity`/`godot`
+and an optional URL override.
+
+Both bridges are unit-tested against real fake local servers (a real `ws`
+`WebSocketServer` for Godot, a real JSON-RPC responder for Unity) — neither
+has been run against an actual Unity Editor + `unity-mcp` install or Godot
+Editor + bridge plugin, since neither engine is installed in this
+environment. See UNITY_BRIDGE.md.
+
 ## Agent loop
 
 `packages/agent/src/agent.ts`: `Agent.run(conversation)` repeats, up to
@@ -210,6 +254,28 @@ Two more pieces exist outside the agent's tool set entirely, both in
    `role: "tool"` messages, and loop.
 4. An `AbortSignal` can cancel between iterations (`stoppedReason: "cancelled"`);
    hitting the iteration cap stops with `"max_iterations"`.
+
+After a successful `capture_screenshot` tool call, `Agent.run()` splices in
+an *additional* user-role message — built by `packages/vision`'s
+`buildVideoAnalysisMessage()` — containing the actual captured image plus a
+vision-analysis prompt, right after the tool-result message. This matters
+because `ToolResultMessage.content` is string-only, so a JSON blob
+describing a screenshot is not the same thing as the model actually seeing
+it; the splice is what makes the *next* `generate()` call give a
+vision-capable model real pixels to look at instead of an opaque result
+string. Verified end-to-end in `apps/server/src/e2e.test.ts` against a fake
+`unity-mcp` server.
+
+Two more limits apply only in `autonomous` mode (`AgentOptions.maxWallClockMs`,
+`maxFileModifications`): wall-clock is checked between iterations (a single
+slow tool call can still run past budget, but no new iteration starts after
+it exceeds the limit), and file-modification count only increments on
+successful `create_file`/`edit_file`/`delete_file` calls (a failed edit
+doesn't count against the cap). Each produces its own `stoppedReason`
+(`"timed_out"` / `"file_limit_reached"`) distinct from a normal completion.
+`apps/server` applies conservative defaults (30 minutes, 50 file
+modifications) automatically whenever `mode === "autonomous"`, overridable
+per request.
 
 Every step is recorded as an `OperationLogEntry` and forwarded via
 `onLogEntry`, which `apps/server` uses to stream tool activity to the UI live.
@@ -236,7 +302,8 @@ agent's system prompt alongside the project context.
 
 ## What's deliberately not built yet
 
-Per the spec's phased rollout: Unity bridge, screenshot/vision loop,
-autonomous-mode safety limits beyond iteration count (max command time,
-rollback via git checkpoints), and OS-keychain-backed credential storage.
-See [ROADMAP.md](ROADMAP.md).
+OS-keychain-backed credential storage (currently session-only), streaming
+wired into the chat UI (per-provider `stream()` exists but the UI still uses
+`generate()`), and a finer-grained per-run filesystem allowlist beyond
+`WorkspaceGuard`'s project-root sandbox. See [ROADMAP.md](ROADMAP.md)'s
+"Smaller known gaps" section.

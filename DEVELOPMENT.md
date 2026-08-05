@@ -47,16 +47,25 @@ npx vitest run packages/tools   # scope to one package
 npx vitest watch                # watch mode while iterating
 ```
 
-Latest count: 194 tests across 44 files, all passing, including an automated
-end-to-end smoke test (`apps/server/src/e2e.test.ts`) that drives the full
-"open project -> list models -> chat -> read file -> edit file -> run
-command -> report" loop against a fake Ollama server, with no external
-services required. The generation-vendor packages (`assets3d`, `rigging`,
-`audio`) are tested the same way — mocked `fetch`, no live vendor calls. The
-CLI-based local adapters (`BlenderAutoRigProvider`, `packages/vision`'s
-ffmpeg extraction) are tested against this environment's real (lack of)
-installation instead of mocking `child_process`, so the graceful-degradation
-path is genuinely exercised, not just asserted.
+Latest count: 233 tests across 48 files, all passing, including several
+automated end-to-end tests in `apps/server/src/e2e.test.ts`: the original
+smoke test driving "open project -> list models -> chat -> read file -> edit
+file -> run command -> report" against a fake Ollama server; a checkpoint
+test verifying `maybeCreateCheckpoint()` runs before a build-mode request;
+and a Phase 7-10 capstone test that drives `capture_screenshot` through a
+real `EngineBridge` (a fake `unity-mcp` HTTP server speaking real JSON-RPC)
+and confirms the captured image is spliced into the next model turn — all
+with no external services required. The generation-vendor packages
+(`assets3d`, `rigging`, `audio`) are tested the same way — mocked `fetch`,
+no live vendor calls. `packages/engine-bridge` is tested against real local
+fake servers instead: a real `ws` `WebSocketServer` standing in for the
+Godot bridge plugin, and a real JSON-RPC-over-HTTP responder standing in for
+`unity-mcp`, so the actual wire protocol is exercised, not a mocked
+`fetch`/`WebSocket` call. The CLI-based local adapters
+(`BlenderAutoRigProvider`, `packages/vision`'s ffmpeg extraction) are tested
+against this environment's real (lack of) installation instead of mocking
+`child_process`, so the graceful-degradation path is genuinely exercised,
+not just asserted.
 
 ## Running the app locally
 
@@ -96,12 +105,19 @@ Not every local model supports tool calling well — if the agent's tool calls
 come back malformed, try a model explicitly documented as supporting Ollama's
 `tools` field (e.g. Llama 3.1+, Qwen 2.5+, Mistral Nemo).
 
-## Connecting Unity
+## Connecting an engine bridge (Unity or Godot)
 
-Not implemented yet — see [UNITY_BRIDGE.md](UNITY_BRIDGE.md), which now
-specifies adopting [CoplayDev/unity-mcp](https://github.com/CoplayDev/unity-mcp)
-as the concrete bridge protocol, and [ROADMAP.md](ROADMAP.md) for when it
-lands (Phase 7+).
+In the GameForge UI's "Engine Bridge" panel, pick `unity` or `godot` and
+optionally override the default URL (`http://127.0.0.1:6400` for Unity,
+`ws://127.0.0.1:6401` for Godot). For Unity, this expects a running
+[CoplayDev/unity-mcp](https://github.com/CoplayDev/unity-mcp) server started
+by the Unity Editor package; for Godot, a bridge plugin speaking GameForge's
+WebSocket command protocol (see [UNITY_BRIDGE.md](UNITY_BRIDGE.md) for the
+`EngineBridge` design and [ARCHITECTURE.md](ARCHITECTURE.md) for the
+implementation). Neither has been exercised against a real Editor in this
+environment — `packages/engine-bridge`'s tests run against fake local
+servers instead, so the wire protocol is verified even without an Editor
+installed here.
 
 ## Running a local generation model instead of a cloud vendor
 
@@ -113,12 +129,12 @@ Kokoro (the community Kokoro-FastAPI wrapper already speaks the right
 shape). Point the corresponding tool's `baseUrl` setting at wherever that
 server is listening.
 
-## Adding a new LLM or generation-vendor provider
+## Adding a new LLM, generation-vendor, or engine-bridge provider
 
-See [PROVIDERS.md](PROVIDERS.md) — LLM providers and generation-vendor
-providers (3D, rigging, motion, voice, music) follow the same interface +
-adapter + registry pattern, whether the new vendor is a cloud API or
-another local model.
+See [PROVIDERS.md](PROVIDERS.md) — LLM providers, generation-vendor
+providers (3D, rigging, motion, voice, music), and engine bridges (Unity,
+Godot, or a future engine) all follow the same interface + adapter +
+registry pattern.
 
 ## Project structure conventions
 

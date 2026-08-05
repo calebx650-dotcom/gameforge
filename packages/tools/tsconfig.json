@@ -12,6 +12,7 @@
     { "path": "../audio" },
     { "path": "../level-design" },
     { "path": "../combat-ai" },
-    { "path": "../shader-synthesis" }
+    { "path": "../shader-synthesis" },
+    { "path": "../engine-bridge" }
   ]
 }

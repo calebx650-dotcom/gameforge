@@ -5,6 +5,7 @@ import { GitPanel } from "./GitPanel.js";
 
 const PROVIDERS = ["ollama", "openai", "openrouter", "anthropic", "openai-compatible"] as const;
 const MODES: AgentMode[] = ["ask", "assist", "build", "autonomous"];
+const ENGINES = ["none", "unity", "godot"] as const;
 
 interface PendingApproval {
   requestId: string;
@@ -36,6 +37,9 @@ export function App() {
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const [busy, setBusy] = useState(false);
   const [gitRefreshSignal, setGitRefreshSignal] = useState(0);
+
+  const [engine, setEngine] = useState<string>("none");
+  const [engineUrl, setEngineUrl] = useState("");
 
   const socketRef = useRef<ChatSocket | null>(null);
 
@@ -73,6 +77,7 @@ export function App() {
           mode,
           providerSettings: { provider, model, baseUrl: baseUrl || undefined, apiKey: apiKey || undefined },
           message: prompt,
+          engineSettings: engine !== "none" ? { engine, url: engineUrl || undefined } : undefined,
         });
       },
       onLog: (entry) => setLog((prev) => [...prev, entry]),
@@ -165,6 +170,29 @@ export function App() {
                 </button>
               ))}
             </div>
+          </section>
+
+          <section className="panel">
+            <h2>Engine Bridge</h2>
+            <select value={engine} onChange={(e) => setEngine(e.target.value)}>
+              {ENGINES.map((e) => (
+                <option key={e} value={e}>
+                  {e}
+                </option>
+              ))}
+            </select>
+            {engine !== "none" && (
+              <input
+                placeholder={engine === "unity" ? "http://127.0.0.1:6400 (default)" : "ws://127.0.0.1:6401 (default)"}
+                value={engineUrl}
+                onChange={(e) => setEngineUrl(e.target.value)}
+              />
+            )}
+            {engine !== "none" && (
+              <p className="context-summary">
+                Scene/object/play-mode/screenshot tools become available. Requires a running {engine === "unity" ? "unity-mcp" : "Godot bridge plugin"} server.
+              </p>
+            )}
           </section>
 
           {project && <GitPanel projectId={project.id} refreshSignal={gitRefreshSignal} />}

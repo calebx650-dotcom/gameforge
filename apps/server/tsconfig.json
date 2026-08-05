@@ -17,6 +17,7 @@
     { "path": "../../packages/agent" },
     { "path": "../../packages/assets3d" },
     { "path": "../../packages/rigging" },
-    { "path": "../../packages/audio" }
+    { "path": "../../packages/audio" },
+    { "path": "../../packages/engine-bridge" }
   ]
 }

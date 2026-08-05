@@ -1,5 +1,5 @@
 {
-  "name": "@gameforge/agent",
+  "name": "@gameforge/engine-bridge",
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -10,8 +10,9 @@
   },
   "dependencies": {
     "@gameforge/shared": "*",
-    "@gameforge/llm": "*",
-    "@gameforge/tools": "*",
-    "@gameforge/vision": "*"
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.12"
   }
 }

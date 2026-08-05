@@ -13,6 +13,7 @@
     "@gameforge/agent": "*",
     "@gameforge/assets3d": "*",
     "@gameforge/audio": "*",
+    "@gameforge/engine-bridge": "*",
     "@gameforge/llm": "*",
     "@gameforge/memory": "*",
     "@gameforge/project": "*",

@@ -94,9 +94,11 @@ alongside text, and `OpenAICompatibleProvider`/`AnthropicProvider` already
 translate it to each vendor's image format. `OllamaProvider` currently only
 sends text content (Ollama's multimodal message format needs a small
 follow-up to wire through). `packages/vision`'s `buildVideoAnalysisMessage()`
-already builds exactly this kind of multi-image message from extracted
-video frames — see [ROADMAP.md](ROADMAP.md) for why it isn't wired into the
-agent as a tool yet (no capture source without the Unity bridge).
+builds exactly this kind of multi-image message, and it's wired into the
+agent loop: after a successful `capture_screenshot` engine-bridge tool call,
+`Agent.run()` splices the built message into the conversation so the next
+`generate()` call actually gives a vision-capable model the captured image
+to look at. See ARCHITECTURE.md's "Agent loop" and "Engine bridge" sections.
 
 ## Generation-vendor providers
 
@@ -218,6 +220,49 @@ tests (`packages/rigging/src/providers/blender-auto-rig.test.ts`,
 `packages/vision/src/ffmpeg.test.ts`) specifically verify the "tool isn't
 installed" path works cleanly, since that's the one guaranteed to be
 exercised by this repo's own CI.
+
+## Engine-bridge providers
+
+The same interface + adapter + registry pattern applies a third time, for
+game-engine automation surfaces rather than generative content:
+
+```ts
+interface EngineBridge {        // packages/engine-bridge
+  connect(): Promise<void>;
+  isConnected(): boolean;
+  inspectScene(): Promise<SceneInfo>;
+  createObject(request): Promise<SceneObjectSummary>;
+  captureScreenshot(): Promise<ScreenshotResult>;
+  // ...modifyObject, modifyTransform, modifyComponent, saveScene,
+  //    enterPlayMode, exitPlayMode, buildProject, readConsole
+}
+```
+
+| id | Transport | Notes |
+|---|---|---|
+| `unity` | MCP JSON-RPC over HTTP (`McpHttpClient`) | `UnityBridge` maps the generic verbs onto `unity-mcp`'s tool set (`manage_scene`, `manage_gameobject`, `manage_editor`, `read_console`, `capture_screenshot`). Default `http://127.0.0.1:6400`. |
+| `godot` | Raw WebSocket, `{id, command, args}`/`{id, result\|error}` | `GodotBridge` talks GameForge's own command protocol (`scene.get_hierarchy`, `editor.play`, ...) via `GodotWsClient`. Default `ws://127.0.0.1:6401`. |
+
+`createEngineBridge(settings: EngineBridgeSettings)` in
+`packages/engine-bridge/src/registry.ts` is the factory, exactly mirroring
+`createProvider()`/`create*Provider()` above — `packages/tools`'s
+`dispatchEngineTool()` only ever sees the `EngineBridge` interface, never a
+concrete `UnityBridge`/`GodotBridge` instance directly.
+
+### Adding a new engine
+
+1. Add `packages/engine-bridge/src/your-engine-bridge.ts` implementing
+   `EngineBridge`.
+2. Add one branch to `createEngineBridge()` and one entry to
+   `SUPPORTED_ENGINES`.
+3. Add unit tests against a real local fake server for whatever transport
+   the engine actually speaks — see `unity-bridge.test.ts` (fake JSON-RPC
+   HTTP responder) and `godot-bridge.test.ts` (fake `ws.WebSocketServer`)
+   for the pattern; don't mock at the `fetch`/`WebSocket` call level, stand
+   up the real protocol.
+
+Neither `UnityBridge` nor `GodotBridge` has been run against a real Editor
+in this environment — see UNITY_BRIDGE.md.
 
 ## Free, purely local generation tools (no vendor of any kind)
 

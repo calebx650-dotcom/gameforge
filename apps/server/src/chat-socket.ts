@@ -8,6 +8,7 @@ import { summarizeProjectContext } from "@gameforge/project";
 import { createText3DProvider, createPBRMaterialProvider, type AssetGenerationSettings } from "@gameforge/assets3d";
 import { createAutoRigProvider, createMotionProvider, type RiggingSettings } from "@gameforge/rigging";
 import { createVoiceProvider, createMusicGenerationProvider, type VoiceSettings } from "@gameforge/audio";
+import { createEngineBridge, type EngineBridgeSettings } from "@gameforge/engine-bridge";
 import type { ProjectManager } from "./project-manager.js";
 
 /**
@@ -25,6 +26,19 @@ interface GenerationSettings {
   music?: VoiceSettings;
 }
 
+/**
+ * Safety limits applied when mode is "autonomous" — a second, independent
+ * lever from the iteration cap (which applies in every mode). Defaults are
+ * conservative on purpose; the user can loosen or tighten them per request.
+ */
+interface AutonomousLimits {
+  maxWallClockMs?: number;
+  maxFileModifications?: number;
+}
+
+const DEFAULT_AUTONOMOUS_MAX_WALL_CLOCK_MS = 30 * 60 * 1000; // 30 minutes
+const DEFAULT_AUTONOMOUS_MAX_FILE_MODIFICATIONS = 50;
+
 interface ChatRequest {
   type: "chat";
   projectId: string;
@@ -33,6 +47,8 @@ interface ChatRequest {
   message: string;
   systemPromptExtra?: string;
   generationSettings?: GenerationSettings;
+  engineSettings?: EngineBridgeSettings;
+  autonomousLimits?: AutonomousLimits;
 }
 
 /**
@@ -103,6 +119,15 @@ modifies history and is gated by mode like any other write. If the project is a 
 autonomous mode, a checkpoint commit is made automatically before you start working, so the user can always recover
 the pre-change state — you don't need to create that checkpoint yourself, but you may use git_commit to save your
 own progress at meaningful points.
+If an engine bridge is configured for this session (Unity or Godot), you have engine tools: inspect_scene,
+inspect_object, and read_console are read-only; create_object, modify_object, modify_transform, modify_component,
+save_scene, enter_play_mode, exit_play_mode, and build_project modify the engine and are gated by mode like any
+other write. capture_screenshot is read-only, and whatever it captures is shown to you directly as an image in your
+next turn — use it to visually verify a change instead of guessing whether it worked. If no engine bridge is
+configured, engine tool calls fail with a clear message; don't keep retrying them.
+In autonomous mode, this run is bounded by a wall-clock time limit and a cap on how many files you may modify,
+in addition to the iteration limit that applies in every mode — if you hit either, the run stops automatically so
+the user can check in, and that is expected behavior, not a failure to explain away.
 Stay within the project workspace. Explain what you changed and why. Ask before doing anything destructive.`;
 
 /**
@@ -160,6 +185,13 @@ export function handleChatConnection(socket: WebSocket, projects: ProjectManager
       });
     }
 
+    let engineBridge;
+    try {
+      engineBridge = request.engineSettings ? createEngineBridge(request.engineSettings) : undefined;
+    } catch (err) {
+      send(socket, { type: "log", entry: { timestamp: Date.now(), kind: "error", summary: `Engine bridge not configured: ${(err as Error).message}` } });
+    }
+
     const executor = new ToolExecutor(
       session.guard,
       (call: ToolCall, reason: string) => {
@@ -170,6 +202,7 @@ export function handleChatConnection(socket: WebSocket, projects: ProjectManager
         });
       },
       buildGenerationProviders(request.generationSettings),
+      engineBridge,
     );
 
     let provider;
@@ -184,6 +217,14 @@ export function handleChatConnection(socket: WebSocket, projects: ProjectManager
       .filter(Boolean)
       .join("\n");
 
+    const autonomousLimits =
+      request.mode === "autonomous"
+        ? {
+            maxWallClockMs: request.autonomousLimits?.maxWallClockMs ?? DEFAULT_AUTONOMOUS_MAX_WALL_CLOCK_MS,
+            maxFileModifications: request.autonomousLimits?.maxFileModifications ?? DEFAULT_AUTONOMOUS_MAX_FILE_MODIFICATIONS,
+          }
+        : {};
+
     const agent = new Agent({
       provider,
       model: request.providerSettings.model,
@@ -194,6 +235,7 @@ export function handleChatConnection(socket: WebSocket, projects: ProjectManager
       maxOutputTokens: request.providerSettings.maxOutputTokens,
       signal: activeAbortController.signal,
       onLogEntry: (entry) => send(socket, { type: "log", entry }),
+      ...autonomousLimits,
     });
 
     const conversation: ChatMessage[] = [{ role: "user", content: request.message }];

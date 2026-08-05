@@ -1,22 +1,49 @@
-# Unity Bridge (design doc — not yet implemented)
+# Unity Bridge
 
-This describes the planned `GameForgeBridge` Unity integration. Nothing in
-this document is implemented yet — there's no Unity Editor in this build
-environment to implement or test it against — but the concrete protocol
-choice, the data formats the rest of GameForge already produces for it, and
-the open questions are now specific enough that building it is mostly wiring,
-not design.
+The `GameForgeBridge` integration described here is implemented in
+`packages/engine-bridge` (Phase 7-9) as the `EngineBridge` interface plus
+a `UnityBridge` adapter. It's unit-tested against a real JSON-RPC responder
+standing in for `unity-mcp` — there's no Unity Editor in this build
+environment, so it has never been run against a real Editor + `unity-mcp`
+install. What follows is both the implementation's rationale and the parts
+still open for whoever first runs it against a real Editor.
 
-## Why it doesn't exist yet
+## Status
 
-Per the spec's phased rollout, Unity integration starts only after the
+- `packages/engine-bridge/src/engine-bridge.ts` — the `EngineBridge`
+  interface: `connect`/`isConnected`/`inspectScene`/`inspectObject`/
+  `createObject`/`modifyObject`/`modifyTransform`/`modifyComponent`/
+  `saveScene`/`enterPlayMode`/`exitPlayMode`/`buildProject`/
+  `captureScreenshot`/`readConsole`.
+- `packages/engine-bridge/src/mcp-client.ts` — `McpHttpClient`, a real MCP
+  JSON-RPC-over-HTTP client (`tools/list`, `tools/call`).
+- `packages/engine-bridge/src/unity-bridge.ts` — `UnityBridge`, mapping the
+  interface above onto `unity-mcp`'s tool set (`manage_scene`,
+  `manage_gameobject`, `manage_editor`, `read_console`, `capture_screenshot`),
+  default `baseUrl` `http://127.0.0.1:6400`.
+- `packages/tools/src/engine-tools.ts` — twelve real agent tools dispatching
+  through whichever `EngineBridge` the session configured (see
+  ARCHITECTURE.md's "Engine bridge" section).
+- `apps/desktop`'s "Engine Bridge" panel lets a user pick `unity`/`godot` and
+  an optional URL override per chat request.
+- A second implementation, `GodotBridge`, proves the interface isn't secretly
+  Unity-shaped (see ARCHITECTURE.md) — it talks GameForge's own WebSocket
+  command protocol instead of MCP/HTTP.
+
+Everything above is exercised by unit tests against fake local servers only.
+Nothing has been run against a real Unity Editor or a real `unity-mcp`
+install, since neither is present in this environment.
+
+## Why Unity integration came after the non-Unity vertical slice
+
+Per the spec's phased rollout, Unity integration started only after the
 non-Unity vertical slice (provider abstraction, tools, agent loop, project
-scanning, memory) is working end-to-end — which is what this repository
-delivers in Phase 1. Several later-phase pieces have since been pulled
-forward as **provider-agnostic, Unity-independent data generators** (see
-`packages/level-design`, `packages/combat-ai`, `packages/shader-synthesis`,
-and the animation-retargeting additions to `packages/rigging`) specifically
-so that once this bridge exists, it has real, tested data to consume on day
+scanning, memory) was working end-to-end — delivered in Phase 1. Several
+later-phase pieces were pulled forward as **provider-agnostic,
+Unity-independent data generators** (see `packages/level-design`,
+`packages/combat-ai`, `packages/shader-synthesis`, and the
+animation-retargeting additions to `packages/rigging`) specifically so that
+once this bridge existed, it would have real, tested data to consume on day
 one instead of starting from nothing.
 
 ## Concrete protocol choice: adopt `unity-mcp`, don't build one from scratch
@@ -43,16 +70,17 @@ apps/server (Node) -- a thin MCP client wrapping unity-mcp's tools as
 packages/agent (unchanged) -> LLMProvider (unchanged)
 ```
 
-`apps/server` gains an MCP client that connects to a locally-running
-`unity-mcp` server (started by the Unity Editor package) and re-exposes its
-tools through the same `ToolExecutor`/permission-policy path every other
-GameForge tool goes through — so `decidePermission()`'s mode gating and
-approval flow apply to Unity scene edits exactly the way they apply to file
-edits, with no separate code path to keep in sync. `unity-mcp`'s own tool
-names get mapped 1:1 onto `PermissionCategory: "engine"` `ToolDefinition`s;
-mutating ones (create/modify/build/play-mode) follow the same
-ask/assist/build/autonomous gating as `write`, non-mutating ones
-(inspect/read) follow `read`.
+`UnityBridge` (in `packages/engine-bridge`) is that MCP client: it connects
+to a locally-running `unity-mcp` server (started by the Unity Editor
+package) via `McpHttpClient`, and `packages/tools/src/engine-tools.ts`
+re-exposes the generic `EngineBridge` verbs through the same
+`ToolExecutor`/permission-policy path every other GameForge tool goes
+through — so `decidePermission()`'s mode gating and approval flow apply to
+Unity scene edits exactly the way they apply to file edits, with no separate
+code path to keep in sync. The twelve engine tool definitions are mapped
+onto `PermissionCategory: "engine"`; mutating ones (create/modify/build/
+play-mode) follow the same ask/assist/build/autonomous gating as `write`,
+non-mutating ones (inspect/read) follow `read`.
 
 ## Scene assembly: consuming GameForge's own generated data
 
@@ -94,7 +122,7 @@ scene:
   maps onto whichever BT/FSM runtime the project uses (a custom interpreter,
   a third-party asset), not directly onto a Unity built-in system.
 
-## Bridge capabilities (unity-mcp tool categories GameForge will re-expose)
+## Bridge capabilities (unity-mcp tool categories GameForge re-exposes)
 
 Project/scene inspection (category: `engine`, non-mutating -> follows `read` gating):
 - Project identification, Unity version, active scene, scene hierarchy,
