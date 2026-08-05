@@ -1,0 +1,107 @@
+import { describe, expect, it } from "vitest";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { WorkspaceGuard } from "./workspace.js";
+import { ToolExecutor } from "./executor.js";
+
+async function makeProject() {
+  const root = await mkdtemp(join(tmpdir(), "gf-exec-"));
+  await writeFile(join(root, "hello.txt"), "hello world\n");
+  return root;
+}
+
+describe("ToolExecutor", () => {
+  it("reads a file without approval, even in ask mode", async () => {
+    const root = await makeProject();
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+    const result = await executor.execute({ id: "1", name: "read_file", arguments: { path: "hello.txt" } }, "ask");
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toBe("hello world\n");
+  });
+
+  it("denies edit_file in ask mode without asking for approval", async () => {
+    const root = await makeProject();
+    let approvalCalled = false;
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => {
+      approvalCalled = true;
+      return true;
+    });
+    const result = await executor.execute(
+      { id: "1", name: "edit_file", arguments: { path: "hello.txt", oldText: "hello", newText: "bye" } },
+      "ask",
+    );
+    expect(result.isError).toBe(true);
+    expect(approvalCalled).toBe(false);
+  });
+
+  it("asks for approval in assist mode and applies the edit once approved", async () => {
+    const root = await makeProject();
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+    const result = await executor.execute(
+      { id: "1", name: "edit_file", arguments: { path: "hello.txt", oldText: "hello", newText: "bye" } },
+      "assist",
+    );
+    expect(result.isError).toBeFalsy();
+    const content = await readFile(join(root, "hello.txt"), "utf-8");
+    expect(content).toBe("bye world\n");
+  });
+
+  it("respects a rejected approval", async () => {
+    const root = await makeProject();
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => false);
+    const result = await executor.execute(
+      { id: "1", name: "edit_file", arguments: { path: "hello.txt", oldText: "hello", newText: "bye" } },
+      "assist",
+    );
+    expect(result.isError).toBe(true);
+    const content = await readFile(join(root, "hello.txt"), "utf-8");
+    expect(content).toBe("hello world\n");
+  });
+
+  it("allows writes without approval in build mode", async () => {
+    const root = await makeProject();
+    let approvalCalled = false;
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => {
+      approvalCalled = true;
+      return true;
+    });
+    const result = await executor.execute(
+      { id: "1", name: "edit_file", arguments: { path: "hello.txt", oldText: "hello", newText: "bye" } },
+      "build",
+    );
+    expect(result.isError).toBeFalsy();
+    expect(approvalCalled).toBe(false);
+  });
+
+  it("runs a safe command in build mode", async () => {
+    const root = await makeProject();
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+    const result = await executor.execute({ id: "1", name: "run_command", arguments: { command: "echo hi" } }, "build");
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(result.content).stdout.trim()).toBe("hi");
+  });
+
+  it("requires approval for a dangerous command even in autonomous mode", async () => {
+    const root = await makeProject();
+    let approvalCalled = false;
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => {
+      approvalCalled = true;
+      return false;
+    });
+    const result = await executor.execute(
+      { id: "1", name: "run_command", arguments: { command: "rm -rf /" } },
+      "autonomous",
+    );
+    expect(approvalCalled).toBe(true);
+    expect(result.isError).toBe(true);
+  });
+
+  it("blocks path traversal outside the workspace", async () => {
+    const root = await makeProject();
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+    const result = await executor.execute({ id: "1", name: "read_file", arguments: { path: "../../etc/passwd" } }, "ask");
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/escapes workspace/);
+  });
+});

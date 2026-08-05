@@ -1,0 +1,9 @@
+export { WorkspaceGuard, WorkspaceViolationError } from "./workspace.js";
+export { TOOL_DEFINITIONS, findToolDefinition } from "./definitions.js";
+export { decidePermission } from "./permissions.js";
+export type { PermissionDecision } from "./permissions.js";
+export { isDangerousCommand } from "./dangerous-commands.js";
+export { ToolExecutor } from "./executor.js";
+export type { ApprovalRequest } from "./executor.js";
+export * from "./fs-tools.js";
+export * from "./exec-tool.js";

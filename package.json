@@ -1,0 +1,22 @@
+{
+  "name": "gameforge",
+  "private": true,
+  "version": "0.1.0",
+  "description": "GameForge — AI game-development workstation",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "vitest run",
+    "typecheck": "tsc -b --force",
+    "dev:server": "npm run dev --workspace=@gameforge/server",
+    "dev:desktop": "npm run dev --workspace=@gameforge/desktop"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0",
+    "@types/node": "^22.0.0"
+  }
+}
