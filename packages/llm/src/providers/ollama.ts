@@ -1,18 +1,34 @@
 import { ProviderError } from "@gameforge/shared";
-import type { ChatMessage, GenerateChunk, GenerateOptions, ModelInfo, ToolCall } from "@gameforge/shared";
+import type { ChatMessage, ContentPart, GenerateChunk, GenerateOptions, ModelInfo, ToolCall } from "@gameforge/shared";
 import type { GenerateResult, LLMProvider, ProviderConfig } from "../provider.js";
 
 interface OllamaMessage {
   role: string;
   content: string;
+  images?: string[];
   tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }>;
 }
 
+/** Strips a `data:<mime>;base64,` prefix if present — Ollama's `images` array wants raw base64 only. */
+function stripDataUriPrefix(data: string): string {
+  const commaIndex = data.indexOf(",");
+  return data.startsWith("data:") && commaIndex !== -1 ? data.slice(commaIndex + 1) : data;
+}
+
 function toOllamaMessages(messages: ChatMessage[]): OllamaMessage[] {
-  return messages.map((m) => ({
-    role: m.role,
-    content: typeof m.content === "string" ? m.content : m.content.filter((p) => p.type === "text").map((p) => (p as { text: string }).text).join("\n"),
-  }));
+  return messages.map((m) => {
+    if (typeof m.content === "string") {
+      return { role: m.role, content: m.content };
+    }
+    const text = m.content
+      .filter((p): p is Extract<ContentPart, { type: "text" }> => p.type === "text")
+      .map((p) => p.text)
+      .join("\n");
+    const images = m.content
+      .filter((p): p is Extract<ContentPart, { type: "image" }> => p.type === "image")
+      .map((p) => stripDataUriPrefix(p.data));
+    return { role: m.role, content: text, ...(images.length > 0 ? { images } : {}) };
+  });
 }
 
 export class OllamaProvider implements LLMProvider {

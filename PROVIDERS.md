@@ -90,15 +90,32 @@ persisted server-side beyond the lifetime of that request.
 ## Vision / multimodal
 
 `ContentPart` (`packages/shared`) supports `{ type: "image", data, mimeType }`
-alongside text, and `OpenAICompatibleProvider`/`AnthropicProvider` already
-translate it to each vendor's image format. `OllamaProvider` currently only
-sends text content (Ollama's multimodal message format needs a small
-follow-up to wire through). `packages/vision`'s `buildVideoAnalysisMessage()`
-builds exactly this kind of multi-image message, and it's wired into the
-agent loop: after a successful `capture_screenshot` engine-bridge tool call,
-`Agent.run()` splices the built message into the conversation so the next
-`generate()` call actually gives a vision-capable model the captured image
-to look at. See ARCHITECTURE.md's "Agent loop" and "Engine bridge" sections.
+alongside text, and all three providers now translate it to their vendor's
+image format: `OpenAICompatibleProvider`/`AnthropicProvider` map it to
+`image_url`/`type: "image"` blocks respectively, and `OllamaProvider` maps it
+to Ollama's message-level `images: string[]` array (base64 payload, any
+`data:` URI prefix stripped, and the field omitted entirely — not sent as
+`images: []` — on text-only messages). `packages/vision`'s
+`buildVideoAnalysisMessage()` builds exactly this kind of multi-image
+message, and it's wired into the agent loop: after a successful
+`capture_screenshot` engine-bridge tool call, `Agent.run()` splices the
+built message into the conversation so the next `generate()` call actually
+gives a vision-capable model the captured image to look at. See
+ARCHITECTURE.md's "Agent loop" and "Engine bridge" sections.
+
+### Ollama vision support — verification status
+
+`OllamaProvider`'s image handling is unit-tested (`packages/llm/src/
+providers/ollama.test.ts`) against a mocked `fetch`, confirming the request
+body shape matches Ollama's documented `images` field. **It has not been
+verified against a real Ollama server or a real multimodal model** — no
+Ollama instance was reachable at `http://127.0.0.1:11434` in this
+environment when this was implemented (Game Forge Local Verification
+Phase 1). Whether a real model such as Qwen2.5-VL actually accepts and uses
+the `images` array the way Ollama's docs describe is unconfirmed. Anyone
+running Game Forge against a local Ollama install with a pulled multimodal,
+tool-calling-capable model is the first real test of this path — see
+ROADMAP.md's "Smaller known gaps" entry for the same caveat.
 
 ## Generation-vendor providers
 
