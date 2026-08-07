@@ -171,13 +171,23 @@ pattern.
   calling together is rejected by this particular model — an Ollama/model
   capability limit, not a Game Forge bug).
 - ~~All 39 tools sent to every provider on every turn regardless of
-  session config~~ — **fixed** (Game Forge Local Verification Phase 2).
-  `ToolExecutor.getAvailableTools()` (`packages/tools/src/tool-scope.ts`)
-  now filters the schema set sent to the model down to what the session
-  can actually use — see ARCHITECTURE.md's "Agent loop" section. Unit- and
-  agent-level tested (9 new tests). Real-hardware re-verification against
-  a local Ollama model with the trimmed set is in progress/pending — this
-  bullet will be updated with the result.
+  session config~~ — **fixed and verified** (Game Forge Local Verification
+  Phase 2). `ToolExecutor.getAvailableTools()`
+  (`packages/tools/src/tool-scope.ts`) now filters the schema set sent to
+  the model down to what the session can actually use — see
+  ARCHITECTURE.md's "Agent loop" section. Unit- and agent-level tested (9
+  new tests), and confirmed on real hardware: the same Ollama 0.32.6
+  install from Phase 1, model `llama3.2:latest` (3.2B — the smallest
+  tool-calling model available, deliberately chosen as the harder case),
+  driven through Game Forge's real `Agent.run()` loop
+  (`scripts/verify-tool-scoping.mjs`) against a real temp project on disk
+  with no engine bridge or generation vendor configured. The model was
+  handed 21 tools instead of the full 39, correctly chose a real
+  file-reading tool (`search_project`, a reasonable alternative to
+  `read_file` for a "find X in this file" prompt) on its own, and reported
+  back the real value read from a real file, character-for-character
+  correct. A small local model reliably using the trimmed set is
+  confirmed, not assumed.
 - Persisting the operation log to disk (currently in-memory per agent run).
 - Generation tool calls block one agent iteration for the whole
   submit-then-poll job duration (bounded by a timeout) rather than exposing

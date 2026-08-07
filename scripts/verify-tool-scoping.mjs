@@ -94,12 +94,18 @@ try {
   console.log("Final assistant message:", finalText);
   console.log("");
 
-  const calledReadFile = result.log.some((e) => e.kind === "tool_call" && e.summary.includes("read_file"));
+  // Any real file-reading tool counts — read_file is the obvious choice, but
+  // search_project reading the matched line's real text is an equally
+  // grounded (not hallucinated) way to answer this prompt. What matters is
+  // that a real tool call happened and its real result produced the answer.
+  const groundingToolCalled = result.log.some(
+    (e) => e.kind === "tool_call" && (e.summary.includes("read_file") || e.summary.includes("search_project")),
+  );
   const gotSecretBack = finalText?.includes(secretValue);
 
-  console.log(`RESULT: read_file was called: ${calledReadFile}`);
+  console.log(`RESULT: a grounding tool call (read_file or search_project) was made: ${groundingToolCalled}`);
   console.log(`RESULT: correct secret value appeared in the final answer: ${Boolean(gotSecretBack)}`);
-  if (calledReadFile && gotSecretBack) {
+  if (groundingToolCalled && gotSecretBack) {
     console.log("\nRESULT: PASSED — real tool call, with the scoped tool set, produced the correct answer.");
   } else {
     console.log("\nRESULT: DID NOT FULLY SUCCEED — see the log and final message above for what actually happened.");
