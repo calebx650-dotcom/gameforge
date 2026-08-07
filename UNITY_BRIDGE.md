@@ -2,11 +2,15 @@
 
 The `GameForgeBridge` integration described here is implemented in
 `packages/engine-bridge` (Phase 7-9) as the `EngineBridge` interface plus
-a `UnityBridge` adapter. It's unit-tested against a real JSON-RPC responder
-standing in for `unity-mcp` — there's no Unity Editor in this build
-environment, so it has never been run against a real Editor + `unity-mcp`
-install. What follows is both the implementation's rationale and the parts
-still open for whoever first runs it against a real Editor.
+a `UnityBridge` adapter. `UnityBridge`/`McpHttpClient`'s own package-level
+tests mock `fetch` directly; the one place it's actually exercised against
+a real HTTP JSON-RPC responder standing in for `unity-mcp` is the capstone
+test in `apps/server/src/e2e.test.ts` (corrected here after Game Forge
+Local Verification Phase 4 audited an earlier, overstated claim that the
+package-level tests did this too). There's no Unity Editor in this build
+environment, so none of it has been run against a real Editor +
+`unity-mcp` install. What follows is both the implementation's rationale
+and the parts still open for whoever first runs it against a real Editor.
 
 ## Status
 
@@ -30,9 +34,10 @@ still open for whoever first runs it against a real Editor.
   Unity-shaped (see ARCHITECTURE.md) — it talks GameForge's own WebSocket
   command protocol instead of MCP/HTTP.
 
-Everything above is exercised by unit tests against fake local servers only.
-Nothing has been run against a real Unity Editor or a real `unity-mcp`
-install, since neither is present in this environment.
+Everything above is exercised by tests against fake/mocked servers only —
+see the note above on which layer uses a mocked `fetch` vs. a real HTTP
+responder. Nothing has been run against a real Unity Editor or a real
+`unity-mcp` install, since neither is present in this environment.
 
 ## Why Unity integration came after the non-Unity vertical slice
 

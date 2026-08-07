@@ -38,12 +38,19 @@ should be working and tested before the next starts.
       `unity-mcp`'s tool set (`manage_scene`, `manage_gameobject`,
       `manage_editor`, `read_console`); and `GodotBridge`, a second
       implementation over GameForge's own WebSocket command protocol,
-      proving the abstraction isn't secretly Unity-shaped. Both are unit
-      tested against fake local servers (a real `ws` `WebSocketServer` fake
-      for Godot, a real JSON-RPC responder for Unity) — neither has been
-      run against a real Unity Editor + `unity-mcp` install or a real Godot
-      Editor + bridge plugin, since neither engine is installed in this
-      environment. The Godot-side EditorPlugin and any future Unity C#
+      proving the abstraction isn't secretly Unity-shaped. Test rigor
+      differs by layer, corrected here after Game Forge Local Verification
+      Phase 4 audited the original (overstated) claim: `GodotBridge`'s own
+      package-level tests (`packages/engine-bridge/src/godot-bridge.test.ts`)
+      spin up a real `ws` `WebSocketServer`; `UnityBridge`/`McpHttpClient`'s
+      package-level tests (`mcp-client.test.ts`, `unity-bridge.test.ts`) only
+      mock `fetch` directly. The one place `UnityBridge` is actually
+      exercised against a real HTTP JSON-RPC responder is the capstone test
+      in `apps/server/src/e2e.test.ts`, which spins up a real
+      `http.createServer` standing in for `unity-mcp`. Neither bridge has
+      been run against a real Unity Editor + `unity-mcp` install or a real
+      Godot Editor + bridge plugin, since neither engine is installed in
+      this environment. The Godot-side EditorPlugin and any future Unity C#
       package changes are out of scope for this TypeScript codebase to
       write or test.
 - [x] **Phase 8** — Unity/engine inspection/control. Twelve tool
