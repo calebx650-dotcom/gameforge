@@ -200,10 +200,18 @@ pattern.
   exercised against a live account/API key in this environment — if a
   vendor's actual response shape differs, the fix is confined to that one
   adapter file, never to the interface or the agent/tool layers above it.
-  Similarly, none of the local-first adapters (TripoSR, TRELLIS, Blender,
-  MotionGPT, Kokoro, XTTS-v2, AudioCraft) have been run against an actual
-  local inference server in this environment (no GPU, no Blender install
-  here) — see PROVIDERS.md's "Running local-first" section.
+  Similarly, most of the local-first adapters (TripoSR, TRELLIS, Blender,
+  MotionGPT, XTTS-v2, AudioCraft) have not been run against an actual local
+  inference server (no GPU, no Blender install in this sandbox) — see
+  PROVIDERS.md's "Running local-first" section, which now also explains
+  why they're a different kind of unverified than the cloud adapters (they're
+  coded against a wire contract Game Forge invented, not a real server's
+  documented API). **Kokoro is the exception** — verified end-to-end against
+  a real `kokoro-fastapi-cpu` Docker container in Game Forge Local
+  Verification Phase 3: real audio, decoded and played back, confirmed
+  correct by a human listener, through both the direct provider path and
+  the real `generate_voice_line` tool-dispatch path. See PROVIDERS.md's
+  "Kokoro voice — verification status" section.
 - `packages/vision`'s screenshot-analysis path is wired into the agent loop
   (Phase 10). The ffmpeg static-extraction path and the `LiveFrameBuffer`
   real-time ring buffer are still library-only — nothing currently drives

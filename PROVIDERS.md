@@ -176,36 +176,72 @@ both just implement the same interface. That's deliberate: it's what makes
 architecture rather than a promise contradicted by what's wired up. See
 "Running local-first" below for how the local options actually work.
 
+### Kokoro voice — verification status
+
+`KokoroProvider`'s wire format (`packages/audio/src/providers/kokoro.ts`)
+has been **verified against a real running Kokoro-FastAPI server** (Game
+Forge Local Verification Phase 3):
+
+- **Environment**: `kokoro-fastapi-cpu` (`ghcr.io/remsky/kokoro-fastapi-cpu:latest`)
+  in Docker, `http://127.0.0.1:8880`, voice `af_heart`.
+- **Direct provider test — passed.** `createVoiceProvider({ provider:
+  "kokoro" })` → `KokoroProvider.submitJob()` sent a real request and got
+  back 60,717 bytes of real MP3 audio, decoded and saved to disk, and
+  confirmed by a human listener to be the exact requested sentence spoken
+  correctly — not silence, noise, or an unrelated clip.
+- **Tool-dispatch test — passed.** The same request through the real
+  `dispatchGenerationTool("generate_voice_line", ...)` path (what the agent
+  actually calls) produced the identical successful result, confirming the
+  tool-dispatch wiring and not just the raw provider class.
+
+This makes Kokoro the first, and so far only, local-first generation
+adapter in the codebase verified against real software rather than only a
+mocked `fetch`. See the "Running local-first" section below for how this
+compares to the other five local-first adapters, which remain unverified.
+
 ### Running local-first
 
 Every local-first provider above talks to a small HTTP (or, for
 `blender-auto-rig`, a CLI) server you run yourself — GameForge doesn't
-bundle or manage these model runtimes:
+bundle or manage these model runtimes. As of Game Forge Local Verification
+Phase 3, these fall into two very different categories — **verified
+against a real server** vs. **unverified design pending a real server** —
+and the distinction matters:
 
-- **TripoSR / TRELLIS**: run the upstream repo's inference code behind a
-  thin FastAPI/Flask wrapper exposing `POST /generate` (see
-  `packages/assets3d/src/providers/triposr.ts`/`trellis.ts` for the exact
-  expected request/response shape — deliberately minimal, easy to wrap
-  around either repo's existing Python entrypoint).
-- **Blender auto-rig**: just needs `blender` on `PATH` — no server, no
-  addon. `BlenderAutoRigProvider` shells out to a headless
+- **Kokoro — verified.** ✅ The community **Kokoro-FastAPI** wrapper
+  already speaks OpenAI's `/v1/audio/speech` shape, so `KokoroProvider`
+  needed zero Kokoro-specific protocol work — and it's been confirmed
+  correct end-to-end against a real server: a real `kokoro-fastapi-cpu`
+  Docker container (`ghcr.io/remsky/kokoro-fastapi-cpu:latest`), driven
+  through both the real `createVoiceProvider()` factory and the real
+  `generate_voice_line` tool-dispatch path
+  (`scripts/verify-kokoro-voice.mjs`). The returned audio was saved to a
+  real `.mp3` file, played back, and confirmed by a human listener to be
+  the correct sentence spoken clearly — not just a non-empty HTTP response.
+  This is the one local-first generation adapter in the whole codebase
+  that's actually been proven to work, not just designed to plausibly work.
+- **TripoSR / TRELLIS / MotionGPT / Coqui XTTS-v2 / AudioCraft —
+  unverified design pending a real server.** ⚠️ Unlike Kokoro, none of
+  these wrap an existing, already-running server format. Each adapter
+  (`packages/assets3d/src/providers/triposr.ts`/`trellis.ts`,
+  `packages/rigging/src/providers/motiongpt.ts`,
+  `packages/audio/src/providers/xtts.ts`/`audiocraft.ts`) is real client
+  code, but it's written against a wire contract **Game Forge itself
+  invented** (e.g. TripoSR's `POST /generate` with `{image_url,
+  remove_background}`) — none of these upstream projects ship a server at
+  all, so someone would need to hand-write that FastAPI/Flask wrapper
+  before any of this code has anywhere real to talk to. Treat these as a
+  documented, plausible design — not a working integration — until one is
+  actually stood up and verified the way Kokoro just was.
+- **Blender auto-rig** sits outside this split entirely: no server
+  involved, just the `blender` binary on `PATH`.
+  `BlenderAutoRigProvider` shells out to a headless
   `blender --background --python ...` invocation with a built-in rigging
   script (basic bone placement + automatic-weight skinning); see
-  `packages/rigging/src/providers/blender-auto-rig.ts`.
-- **MotionGPT**: same local-HTTP-server shape as TripoSR/TRELLIS.
-- **Kokoro**: the community **Kokoro-FastAPI** wrapper already speaks
-  OpenAI's `/v1/audio/speech` shape, so `KokoroProvider` needs zero
-  Kokoro-specific protocol work.
-- **Coqui XTTS-v2**: `coqui-ai/TTS`'s built-in `tts-server` (or an
-  equivalent wrapper) exposing `POST /api/tts` with a `speaker_wav`
-  reference-audio path for cloning.
-- **AudioCraft**: a thin wrapper around `facebookresearch/audiocraft`'s
-  `MusicGen`/`AudioGen` pipelines, routed by the `kind` field
-  (`ambient_music` -> MusicGen, `sound_effect` -> AudioGen).
-
-None of these adapters have been exercised against a real running instance
-of the wrapped model in this environment (no GPU here) — see the note at
-the bottom of this file for what that means in practice.
+  `packages/rigging/src/providers/blender-auto-rig.ts`. Its "Blender not
+  installed" graceful-degradation path is genuinely tested (no Blender in
+  this sandbox), but the actual rigging output has not been verified
+  against a real Blender run.
 
 ### Adding a new generation vendor
 
