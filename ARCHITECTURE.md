@@ -248,7 +248,20 @@ environment. See UNITY_BRIDGE.md.
 `packages/agent/src/agent.ts`: `Agent.run(conversation)` repeats, up to
 `maxIterations` (default 10):
 
-1. Call `provider.generate({ model, messages, tools })`.
+1. Call `provider.generate({ model, messages, tools: executor.getAvailableTools() })`.
+   `tools` is *not* the full, static `TOOL_DEFINITIONS` list — `getAvailableTools()`
+   (`packages/tools/src/tool-scope.ts`) filters it down to what this
+   session can actually use: engine tools only if an `EngineBridge` is
+   connected, each vendor-backed generation tool only if its specific
+   provider is configured (`generate_3d_model` needs `text3d`, etc. — see
+   `GENERATION_TOOL_PROVIDER_KEY`), and everything else (fs/exec/git/pure
+   generation tools) always. Before this, every session was handed all 42
+   tool schemas on every turn regardless of what was actually configured,
+   which cost context for every provider and specifically hurt smaller
+   local models more likely to mis-select from a schema set full of tools
+   guaranteed to fail. This only changes what's *advertised*; `ToolExecutor`'s
+   permission checks and each tool's own "not configured" error still apply
+   unconditionally if a model calls something it wasn't offered.
 2. If the model requested no tool calls, stop (`stoppedReason: "completed"`).
 3. Otherwise execute each tool call through `ToolExecutor`, append results as
    `role: "tool"` messages, and loop.

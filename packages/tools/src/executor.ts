@@ -1,4 +1,4 @@
-import type { AgentMode, ToolCall, ToolResultMessage } from "@gameforge/shared";
+import type { AgentMode, ToolCall, ToolDefinition, ToolResultMessage } from "@gameforge/shared";
 import type { EngineBridge } from "@gameforge/engine-bridge";
 import { findToolDefinition } from "./definitions.js";
 import { isDangerousCommand } from "./dangerous-commands.js";
@@ -17,6 +17,7 @@ import type { WorkspaceGuard } from "./workspace.js";
 import { dispatchGenerationTool, isGenerationTool, type GenerationProviders } from "./generation-tools.js";
 import { dispatchEngineTool, isEngineTool } from "./engine-tools.js";
 import { gitStatusTool, gitDiffTool, gitLogTool, gitBranchTool, gitCommitTool } from "./git-tools.js";
+import { getAvailableTools } from "./tool-scope.js";
 
 export type ApprovalRequest = (call: ToolCall, reason: string) => Promise<boolean>;
 
@@ -33,6 +34,16 @@ export class ToolExecutor {
     private readonly generationProviders: GenerationProviders = {},
     private readonly engineBridge?: EngineBridge,
   ) {}
+
+  /**
+   * The tools this session can actually use, given whichever generation
+   * vendors and engine bridge were configured — see tool-scope.ts. This is
+   * what should be sent to the model on every turn instead of the full,
+   * static `TOOL_DEFINITIONS` list.
+   */
+  getAvailableTools(): ToolDefinition[] {
+    return getAvailableTools(this.generationProviders, this.engineBridge);
+  }
 
   async execute(call: ToolCall, mode: AgentMode): Promise<ToolResultMessage> {
     const definition = findToolDefinition(call.name);

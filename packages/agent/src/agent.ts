@@ -1,6 +1,6 @@
 import type { AgentMode, ChatMessage, OperationLogEntry, ToolCall } from "@gameforge/shared";
 import type { LLMProvider } from "@gameforge/llm";
-import { TOOL_DEFINITIONS, ToolExecutor } from "@gameforge/tools";
+import { ToolExecutor } from "@gameforge/tools";
 import { buildVideoAnalysisMessage } from "@gameforge/vision";
 
 export interface AgentOptions {
@@ -80,7 +80,7 @@ export class Agent {
       const result = await this.options.provider.generate({
         model: this.options.model,
         messages,
-        tools: TOOL_DEFINITIONS,
+        tools: this.options.executor.getAvailableTools(),
         temperature: this.options.temperature,
         maxOutputTokens: this.options.maxOutputTokens,
         signal: this.options.signal,

@@ -242,4 +242,13 @@ describe("ToolExecutor", () => {
     expect(result.isError).toBeFalsy();
     expect(JSON.parse(result.content).name).toBe("Scene");
   });
+
+  it("getAvailableTools() excludes engine tools with no bridge and includes them once one is configured", async () => {
+    const root = await makeProject();
+    const withoutBridge = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+    expect(withoutBridge.getAvailableTools().some((t) => t.name === "inspect_scene")).toBe(false);
+
+    const withBridge = new ToolExecutor(new WorkspaceGuard(root), async () => true, {}, { isConnected: () => true } as any);
+    expect(withBridge.getAvailableTools().some((t) => t.name === "inspect_scene")).toBe(true);
+  });
 });

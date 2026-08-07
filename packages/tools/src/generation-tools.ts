@@ -32,6 +32,22 @@ export interface GenerationProviders {
   music?: MusicGenerationProvider;
 }
 
+/**
+ * Maps each vendor-backed generation tool to the `GenerationProviders` key
+ * it needs configured to actually work. Used to decide whether to advertise
+ * the tool to the model at all for a given session (see tool-scope.ts) —
+ * the eight pure/local tools in `GENERATION_TOOL_NAMES` below need no entry
+ * here since they need no provider.
+ */
+export const GENERATION_TOOL_PROVIDER_KEY: Partial<Record<string, keyof GenerationProviders>> = {
+  generate_3d_model: "text3d",
+  generate_pbr_material: "pbr",
+  auto_rig_model: "autoRig",
+  generate_motion_clip: "motion",
+  generate_voice_line: "voice",
+  generate_ambient_audio: "music",
+};
+
 export const GENERATION_TOOL_NAMES = [
   "generate_3d_model",
   "generate_pbr_material",

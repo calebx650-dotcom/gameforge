@@ -238,6 +238,31 @@ describe("Agent", () => {
     expect(result.stoppedReason).toBe("completed"); // the failed edit didn't count against the cap
   });
 
+  it("sends the session's scoped tool list, not the full static TOOL_DEFINITIONS, to the provider", async () => {
+    const root = await makeProject();
+    // No engine bridge and no generation providers configured for this executor,
+    // so engine tools and vendor-backed generation tools should be excluded.
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+
+    let sentToolNames: string[] = [];
+    class RecordingProvider extends ScriptedProvider {
+      async generate(options: GenerateOptions) {
+        sentToolNames = (options.tools ?? []).map((t) => t.name);
+        return super.generate(options);
+      }
+    }
+    const provider = new RecordingProvider([{ message: { role: "assistant", content: "done" } }]);
+
+    const agent = new Agent({ provider, model: "m", systemPrompt: "sys", executor, mode: "build" });
+    await agent.run([{ role: "user", content: "hi" }]);
+
+    expect(sentToolNames).toContain("read_file");
+    expect(sentToolNames).not.toContain("inspect_scene"); // engine tool, no bridge configured
+    expect(sentToolNames).not.toContain("generate_3d_model"); // vendor-backed, no provider configured
+    expect(sentToolNames).toContain("generate_level_layout"); // pure, always available
+    expect(sentToolNames).toEqual(executor.getAvailableTools().map((t) => t.name));
+  });
+
   it("stops immediately when the abort signal is already aborted", async () => {
     const root = await makeProject();
     const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
