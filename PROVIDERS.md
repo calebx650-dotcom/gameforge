@@ -107,15 +107,33 @@ ARCHITECTURE.md's "Agent loop" and "Engine bridge" sections.
 
 `OllamaProvider`'s image handling is unit-tested (`packages/llm/src/
 providers/ollama.test.ts`) against a mocked `fetch`, confirming the request
-body shape matches Ollama's documented `images` field. **It has not been
-verified against a real Ollama server or a real multimodal model** — no
-Ollama instance was reachable at `http://127.0.0.1:11434` in this
-environment when this was implemented (Game Forge Local Verification
-Phase 1). Whether a real model such as Qwen2.5-VL actually accepts and uses
-the `images` array the way Ollama's docs describe is unconfirmed. Anyone
-running Game Forge against a local Ollama install with a pulled multimodal,
-tool-calling-capable model is the first real test of this path — see
-ROADMAP.md's "Smaller known gaps" entry for the same caveat.
+body shape matches Ollama's documented `images` field, and **has since been
+verified against a real local Ollama server** (Game Forge Local
+Verification Phase 1, real-hardware follow-up):
+
+- **Environment**: Ollama 0.32.6, `http://127.0.0.1:11434`, model
+  `qwen2.5vl:7b` (8.3B, Q4_K_M) — reported capabilities `["vision",
+  "completion"]`.
+- **Real image test — passed.** A real screenshot was sent through Game
+  Forge's actual `createProvider()`/`OllamaProvider` code (via
+  `scripts/verify-ollama-vision.mjs`, not a bare curl/API call) using both
+  `generate()` and `stream()`. The model returned a correct, specific
+  description of the image's actual content in both cases, confirming the
+  `images` array genuinely reaches and is used by a real model.
+- **Real image + tool-calling test — unsupported on this model, not a Game
+  Forge bug.** Attaching real `ToolDefinition`s alongside the image
+  produced a clean `400` from Ollama itself: `"does not support tools"`.
+  `qwen2.5vl:7b` simply isn't a tool-calling model per its own reported
+  capabilities; `OllamaProvider` built and sent the request correctly and
+  surfaced Ollama's rejection as a normal `ProviderError`. Combined
+  vision + tool calling on Ollama therefore depends on picking a model that
+  supports both — none of the models available during this verification did
+  (the tool-calling models on hand, `gemma4`/`llama3.2`, don't support
+  vision; the vision model, `qwen2.5vl:7b`, doesn't support tools).
+
+The `scripts/verify-ollama-vision.mjs` harness added for this verification
+remains in the repo for anyone re-running this check against a different
+model or machine.
 
 ## Generation-vendor providers
 

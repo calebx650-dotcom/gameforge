@@ -159,14 +159,17 @@ pattern.
 - OS-keychain-backed API key storage (currently session-only, see SECURITY.md).
 - Streaming (`LLMProvider.stream()`) is implemented per-provider but not yet
   wired into the chat UI, which currently uses `generate()`.
-- `OllamaProvider` now translates `ImagePart` content into Ollama's
-  message-level `images: string[]` array (base64, `data:` prefix stripped),
-  matching the other providers' behavior — fixed and unit-tested (Game
-  Forge Local Verification Phase 1). **Not yet verified against a real
-  Ollama instance in this environment** — no Ollama server was reachable at
-  `http://127.0.0.1:11434` when this was implemented, so behavior against
-  a real multimodal model (e.g. Qwen2.5-VL) is unconfirmed. See
-  PROVIDERS.md's "Ollama vision support" section.
+- ~~`OllamaProvider` doesn't send image content~~ — **fixed and verified**
+  (Game Forge Local Verification Phase 1). `ImagePart` content now maps to
+  Ollama's message-level `images: string[]` array (base64, `data:` prefix
+  stripped). Unit-tested against a mocked server, and confirmed against a
+  real local Ollama 0.32.6 install running `qwen2.5vl:7b`: a real screenshot
+  sent through Game Forge's actual `OllamaProvider` produced a correct,
+  specific description of the image's contents, in both `generate()` and
+  `stream()`. See PROVIDERS.md's "Ollama vision support" section for the
+  full results, including the one real limitation found (image + tool
+  calling together is rejected by this particular model — an Ollama/model
+  capability limit, not a Game Forge bug).
 - Persisting the operation log to disk (currently in-memory per agent run).
 - Generation tool calls block one agent iteration for the whole
   submit-then-poll job duration (bounded by a timeout) rather than exposing
