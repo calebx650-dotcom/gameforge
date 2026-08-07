@@ -255,9 +255,11 @@ environment. See UNITY_BRIDGE.md.
    connected, each vendor-backed generation tool only if its specific
    provider is configured (`generate_3d_model` needs `text3d`, etc. — see
    `GENERATION_TOOL_PROVIDER_KEY`), and everything else (fs/exec/git/pure
-   generation tools) always. Before this, every session was handed all 42
-   tool schemas on every turn regardless of what was actually configured,
-   which cost context for every provider and specifically hurt smaller
+   generation tools) always. Before this, every session was handed all 39
+   tool schemas (`TOOL_DEFINITIONS.length`) on every turn regardless of what
+   was actually configured — a session with no engine bridge and no
+   generation vendors configured now sees 21 instead of 39. That
+   cost context for every provider and specifically hurt smaller
    local models more likely to mis-select from a schema set full of tools
    guaranteed to fail. This only changes what's *advertised*; `ToolExecutor`'s
    permission checks and each tool's own "not configured" error still apply

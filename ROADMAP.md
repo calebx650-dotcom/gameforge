@@ -170,14 +170,14 @@ pattern.
   full results, including the one real limitation found (image + tool
   calling together is rejected by this particular model — an Ollama/model
   capability limit, not a Game Forge bug).
-- ~~All 42 tools sent to every provider on every turn regardless of
+- ~~All 39 tools sent to every provider on every turn regardless of
   session config~~ — **fixed** (Game Forge Local Verification Phase 2).
   `ToolExecutor.getAvailableTools()` (`packages/tools/src/tool-scope.ts`)
   now filters the schema set sent to the model down to what the session
   can actually use — see ARCHITECTURE.md's "Agent loop" section. Unit- and
-  agent-level tested (9 new tests); not yet re-verified against a real
-  local Ollama model with the trimmed set, which was the second half of
-  this phase's original scope — see the note at the end of this section.
+  agent-level tested (9 new tests). Real-hardware re-verification against
+  a local Ollama model with the trimmed set is in progress/pending — this
+  bullet will be updated with the result.
 - Persisting the operation log to disk (currently in-memory per agent run).
 - Generation tool calls block one agent iteration for the whole
   submit-then-poll job duration (bounded by a timeout) rather than exposing
