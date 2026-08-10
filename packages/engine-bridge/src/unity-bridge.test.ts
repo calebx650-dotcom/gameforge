@@ -127,4 +127,82 @@ describe("UnityBridge", () => {
       { level: "log", message: "hello", stackTrace: undefined },
     ]);
   });
+
+  it("buildProject() forces a real recompile via refresh_unity, not manage_editor, and reports success on a clean console", async () => {
+    const calledTools: string[] = [];
+    let refreshArgs: any;
+    globalThis.fetch = vi.fn(async (_url, init) => {
+      const body = JSON.parse((init as RequestInit).body as string);
+      if (body.method === "initialize") {
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: {} }), {
+          status: 200,
+          headers: { "Mcp-Session-Id": SESSION_ID, "Content-Type": "application/json" },
+        });
+      }
+      if (body.method === "notifications/initialized") {
+        return new Response(null, { status: 202 });
+      }
+      calledTools.push(body.params.name);
+      let result: unknown;
+      if (body.params.name === "refresh_unity") {
+        refreshArgs = body.params.arguments;
+        result = { content: [{ type: "text", text: JSON.stringify({ refresh_triggered: true, compile_requested: true, resulting_state: "idle" }) }] };
+      } else if (body.params.name === "read_console") {
+        result = { content: [{ type: "text", text: JSON.stringify({ success: true, data: [] }) }] };
+      } else {
+        throw new Error(`unexpected tool call in test: ${body.params.name}`);
+      }
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const bridge = new UnityBridge();
+    const result = await bridge.buildProject();
+
+    expect(calledTools).toEqual(["refresh_unity", "read_console"]);
+    expect(refreshArgs).toMatchObject({ mode: "force", scope: "scripts", compile: "request", wait_for_ready: true });
+    expect(result).toEqual({ success: true, errors: undefined });
+  });
+
+  it("buildProject() reports failure with the real compiler error text when the console has errors after recompiling", async () => {
+    globalThis.fetch = vi.fn(async (_url, init) => {
+      const body = JSON.parse((init as RequestInit).body as string);
+      if (body.method === "initialize") {
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: {} }), {
+          status: 200,
+          headers: { "Mcp-Session-Id": SESSION_ID, "Content-Type": "application/json" },
+        });
+      }
+      if (body.method === "notifications/initialized") {
+        return new Response(null, { status: 202 });
+      }
+      let result: unknown;
+      if (body.params.name === "refresh_unity") {
+        result = { content: [{ type: "text", text: JSON.stringify({ refresh_triggered: true, compile_requested: true, resulting_state: "idle" }) }] };
+      } else {
+        result = {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                success: true,
+                data: [{ type: "Error", message: "CS1002: ; expected", stackTrace: null }],
+              }),
+            },
+          ],
+        };
+      }
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const bridge = new UnityBridge();
+    const result = await bridge.buildProject();
+
+    expect(result).toEqual({ success: false, errors: ["CS1002: ; expected"] });
+  });
 });

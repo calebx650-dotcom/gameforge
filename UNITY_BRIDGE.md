@@ -101,15 +101,35 @@ via `uvx`), real project at `GameForgeUnityTest`, HTTP transport, port 8080.
   mapped onto `ConsoleMessage["level"]`. Rerunning
   `scripts/verify-unity-bridge.mjs` afterward returned real console entries
   from the real Editor (its own `MCP-FOR-UNITY` startup log lines).
+- **`buildProject()` was wrong at the design level, not just the transport
+  level — found and fixed while building the Working Demo Sprint's
+  build/fix repair loop.** It originally called `manage_editor` with
+  `action: "build"`, a tool/action pair that doesn't exist in real
+  `mcp-for-unity`. Reading the actual C# source
+  (`Editor/Tools/ManageBuild.cs`, `Editor/Tools/RefreshUnity.cs`) found the
+  real picture: the real build tool is `manage_build`, a *separate* tool
+  that triggers a full distributable player build via
+  `BuildPipeline.BuildPlayer` — async and pollable (`RequiresPolling =
+  true`, up to 30 minutes), the wrong shape entirely for "did my last
+  script edit compile." The right tool for that is `refresh_unity`
+  (`mode: "force", scope: "scripts", compile: "request", wait_for_ready:
+  true`, which blocks the call until Unity finishes recompiling) followed
+  by the already-correct `read_console`. `UnityBridge.buildProject()` now
+  does exactly that, and is documented as deliberately *not* covering a
+  real player/export build — that's a different, heavier operation a
+  future caller needing it would have to implement against `manage_build`
+  directly, polling included. Unit-tested against a fake server speaking
+  this real two-call sequence; not yet exercised against a live Editor
+  (the earlier `connect()`/`readConsole()` live session predates this fix).
 - **Everything else in `UnityBridge`** (`inspectScene`, `createObject`,
   `modifyObject`/`modifyTransform`/`modifyComponent`, `saveScene`,
-  `enterPlayMode`/`exitPlayMode`, `buildProject`, `captureScreenshot`) is
-  still unverified against a real Editor — only the transport-level fix
-  (which applies to every call) and `readConsole()`'s response-shape fix
-  were exercised live. If any of those tools' argument/response shapes are
-  also wrong, `UNITY_BRIDGE.md`'s "Real HTTP transport" section above shows
-  the working pattern (call the real tool over curl, compare against what
-  the code assumes) for finding out.
+  `enterPlayMode`/`exitPlayMode`, `captureScreenshot`) is still unverified
+  against a real Editor — only the transport-level fix (which applies to
+  every call) and `readConsole()`'s response-shape fix were exercised
+  live. If any of those tools' argument/response shapes are also wrong,
+  the "Real HTTP transport" section above shows the working pattern (call
+  the real tool over curl, compare against what the code assumes) for
+  finding out.
 - Getting a Unity-side bridge *session* connected (not just the HTTP server
   reachable) turned out to be its own small yak-shave: `unity-mcp`'s "Start
   Server" UI button both starts the local HTTP server process *and* connects

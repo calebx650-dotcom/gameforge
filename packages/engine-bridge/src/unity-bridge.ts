@@ -122,10 +122,31 @@ export class UnityBridge implements EngineBridge {
     await this.client.callTool("manage_editor", { action: "stop" });
   }
 
-  async buildProject(options: { target?: string } = {}): Promise<BuildResult> {
-    const result = await this.client.callTool("manage_editor", { action: "build", target: options.target });
-    const data = JSON.parse(extractText(result)) as BuildResult;
-    return data;
+  /**
+   * "Build" here means the fast, iterate-friendly signal a script-editing
+   * repair loop actually needs — force Unity to recompile and report
+   * whether the result has compiler errors — not a full distributable
+   * player build. Those are genuinely different unity-mcp tools:
+   * `manage_build` (real player build via `BuildPipeline.BuildPlayer`) is
+   * async/pollable and can take up to 30 minutes, the wrong shape for
+   * "did my last edit compile"; `refresh_unity` forces recompilation and,
+   * with `wait_for_ready: true`, blocks the call until Unity is done
+   * (confirmed live against mcp-for-unity 10.1.2 — see UNITY_BRIDGE.md).
+   * A real player build is deliberately out of scope for this method; a
+   * caller that specifically needs one should be a distinct capability,
+   * not this one, since it needs the async poll protocol `manage_build`
+   * actually requires.
+   */
+  async buildProject(_options: { target?: string } = {}): Promise<BuildResult> {
+    await this.client.callTool("refresh_unity", {
+      mode: "force",
+      scope: "scripts",
+      compile: "request",
+      wait_for_ready: true,
+    });
+    const messages = await this.readConsole({ maxMessages: 100 });
+    const errors = messages.filter((m) => m.level === "error").map((m) => m.message);
+    return { success: errors.length === 0, errors: errors.length ? errors : undefined };
   }
 
   async captureScreenshot(): Promise<ScreenshotResult> {

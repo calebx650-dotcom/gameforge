@@ -233,7 +233,8 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: "build_project",
-    description: "Trigger a build of the current engine project.",
+    description:
+      "Force the engine to recompile scripts and report whether the result has compiler errors — the fast check to run after editing code, before assuming a change works. Not a full distributable player build.",
     category: "engine",
     parameters: {
       type: "object",

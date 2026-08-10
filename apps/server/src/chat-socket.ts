@@ -57,7 +57,18 @@ interface ChatRequest {
    * unaffected.
    */
   stream?: boolean;
+  /**
+   * Hard cap on think/act cycles for this run, passed through to
+   * `Agent.run()`. Defaults to `Agent`'s own default (10) normally, but to
+   * `DEFAULT_ENGINE_MAX_ITERATIONS` when an engine bridge is configured —
+   * a real edit/recompile/read-console/fix loop against a game engine
+   * routinely needs more turns than a plain file-editing request, and 10
+   * was tuned for the latter, not the former.
+   */
+  maxIterations?: number;
 }
+
+const DEFAULT_ENGINE_MAX_ITERATIONS = 25;
 
 /**
  * Builds live provider instances for whichever generation vendors the
@@ -133,6 +144,18 @@ save_scene, enter_play_mode, exit_play_mode, and build_project modify the engine
 other write. capture_screenshot is read-only, and whatever it captures is shown to you directly as an image in your
 next turn — use it to visually verify a change instead of guessing whether it worked. If no engine bridge is
 configured, engine tool calls fail with a clear message; don't keep retrying them.
+build_project forces the engine to recompile and reports whether the result has compiler errors — it is the fast
+"did my last edit actually compile" check, not a full distributable player build; call it after every meaningful
+script edit, not just once at the end. When implementing a code change against a connected engine, follow this
+loop: (1) inspect the project/scene and read the relevant existing scripts before writing anything, so you match
+the project's real structure instead of assuming one; (2) make your edit; (3) call build_project; (4) if it reports
+errors, read them carefully, fix the specific reported problem (don't rewrite unrelated code), and call
+build_project again; (5) repeat step 4 up to about 5 times total — if it's still failing after that, stop, explain
+exactly what's failing and why, and ask the user rather than continuing to guess blindly; (6) once it compiles
+clean, if the change is testable at runtime, use enter_play_mode and read_console (and capture_screenshot if useful)
+to check for runtime errors before reporting success, then exit_play_mode. Never report a feature as working from
+compiling alone — "no compiler errors" and "the feature actually works" are different claims; only make the second
+one if you've actually checked at runtime.
 In autonomous mode, this run is bounded by a wall-clock time limit and a cap on how many files you may modify,
 in addition to the iteration limit that applies in every mode — if you hit either, the run stops automatically so
 the user can check in, and that is expected behavior, not a failure to explain away.
@@ -232,6 +255,7 @@ export function handleChatConnection(socket: WebSocket, projects: ProjectManager
             maxFileModifications: request.autonomousLimits?.maxFileModifications ?? DEFAULT_AUTONOMOUS_MAX_FILE_MODIFICATIONS,
           }
         : {};
+    const maxIterations = request.maxIterations ?? (request.engineSettings ? DEFAULT_ENGINE_MAX_ITERATIONS : undefined);
 
     const agent = new Agent({
       provider,
@@ -244,6 +268,7 @@ export function handleChatConnection(socket: WebSocket, projects: ProjectManager
       signal: activeAbortController.signal,
       onLogEntry: (entry) => send(socket, { type: "log", entry }),
       ...(request.stream ? { onTextDelta: (delta: string) => send(socket, { type: "stream_delta", text: delta }) } : {}),
+      ...(maxIterations != null ? { maxIterations } : {}),
       ...autonomousLimits,
     });
 

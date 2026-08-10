@@ -394,4 +394,143 @@ describe("GameForge end-to-end smoke test", () => {
       await new Promise((resolve) => fakeStreamingOllama.close(resolve));
     }
   });
+
+  it("drives a real edit -> build_project -> error -> fix -> build_project -> success repair loop end to end", async () => {
+    const httpBase = `http://localhost:${gfPort}`;
+
+    // Dedicated fake model server scripting exactly the repair-loop sequence:
+    // write a script, try to build, get a compiler error, fix it, build again, report done.
+    let modelStep = 0;
+    const modelScript = [
+      { message: { content: "", tool_calls: [{ function: { name: "create_file", arguments: { path: "Player.cs", content: "buggy C#" } } }] } },
+      { message: { content: "", tool_calls: [{ function: { name: "build_project", arguments: {} } }] } },
+      { message: { content: "", tool_calls: [{ function: { name: "edit_file", arguments: { path: "Player.cs", oldText: "buggy C#", newText: "fixed C#" } } }] } },
+      { message: { content: "", tool_calls: [{ function: { name: "build_project", arguments: {} } }] } },
+      { message: { content: "Fixed the compiler error and the project now builds clean." } },
+    ];
+    const fakeModel = createHttpServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        if (req.url === "/api/tags") {
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ models: [{ name: "llama3.1:8b" }] }));
+          return;
+        }
+        if (req.url === "/api/chat") {
+          const next = modelScript[Math.min(modelStep, modelScript.length - 1)];
+          modelStep++;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ ...next, prompt_eval_count: 5, eval_count: 5 }));
+          return;
+        }
+        res.statusCode = 404;
+        res.end();
+      });
+    });
+    await new Promise<void>((resolve) => fakeModel.listen(0, resolve));
+    const fakeModelPort = (fakeModel.address() as AddressInfo).port;
+
+    // Fake unity-mcp speaking the real protocol: refresh_unity + read_console
+    // (what build_project actually calls, per UNITY_BRIDGE.md) — first
+    // build_project call reports a compiler error, second reports clean.
+    let buildCallCount = 0;
+    const fakeUnityMcp = createHttpServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        const rpc = JSON.parse(body);
+        res.setHeader("Content-Type", "application/json");
+        if (rpc.method === "initialize") {
+          res.setHeader("Mcp-Session-Id", "fake-session-id");
+          res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: { protocolVersion: "2025-06-18" } }));
+          return;
+        }
+        if (rpc.method === "notifications/initialized") {
+          res.statusCode = 202;
+          res.end();
+          return;
+        }
+        if (rpc.method === "tools/list") {
+          res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: { tools: [{ name: "refresh_unity" }, { name: "read_console" }] } }));
+          return;
+        }
+        if (rpc.method === "tools/call" && rpc.params.name === "refresh_unity") {
+          buildCallCount++;
+          res.end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: rpc.id,
+              result: { content: [{ type: "text", text: JSON.stringify({ refresh_triggered: true, compile_requested: true, resulting_state: "idle" }) }] },
+            }),
+          );
+          return;
+        }
+        if (rpc.method === "tools/call" && rpc.params.name === "read_console") {
+          const errorsForThisBuild =
+            buildCallCount === 1 ? [{ type: "Error", message: "CS1002: ; expected in Player.cs", stackTrace: null }] : [];
+          res.end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: rpc.id,
+              result: { content: [{ type: "text", text: JSON.stringify({ success: true, data: errorsForThisBuild }) }] },
+            }),
+          );
+          return;
+        }
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, error: { message: "unhandled tool call in test" } }));
+      });
+    });
+    await new Promise<void>((resolve) => fakeUnityMcp.listen(0, resolve));
+    const fakeUnityMcpPort = (fakeUnityMcp.address() as AddressInfo).port;
+
+    try {
+      const repairProjectRoot = await mkdtemp(join(tmpdir(), "gf-e2e-repair-"));
+      const openRes = await request(httpBase).post("/api/projects").send({ path: repairProjectRoot });
+      const projectId = openRes.body.id;
+
+      const result = await new Promise<{ finalText: string; toolSequence: string[] }>((resolve, reject) => {
+        const ws = new WebSocket(`ws://localhost:${gfPort}/ws/chat`);
+        const timeout = setTimeout(() => reject(new Error("repair-loop e2e timed out")), 10_000);
+        const toolSequence: string[] = [];
+
+        ws.on("open", () => {
+          ws.send(
+            JSON.stringify({
+              type: "chat",
+              projectId,
+              mode: "build",
+              providerSettings: { provider: "ollama", model: "llama3.1:8b", baseUrl: `http://127.0.0.1:${fakeModelPort}` },
+              engineSettings: { engine: "unity", url: `http://127.0.0.1:${fakeUnityMcpPort}` },
+              message: "Add a player script and make sure it builds.",
+            }),
+          );
+        });
+
+        ws.on("message", (raw) => {
+          const msg = JSON.parse(raw.toString());
+          if (msg.type === "log" && msg.entry.kind === "tool_call") {
+            toolSequence.push(msg.entry.summary.split("(")[0]);
+          } else if (msg.type === "result") {
+            clearTimeout(timeout);
+            const finalMessage = msg.messages[msg.messages.length - 1];
+            ws.close();
+            resolve({ finalText: finalMessage.content, toolSequence });
+          } else if (msg.type === "error") {
+            clearTimeout(timeout);
+            reject(new Error(msg.message));
+          }
+        });
+      });
+
+      expect(result.toolSequence).toEqual(["create_file", "build_project", "edit_file", "build_project"]);
+      expect(result.finalText).toContain("builds clean");
+
+      const finalFileContent = await readFile(join(repairProjectRoot, "Player.cs"), "utf-8");
+      expect(finalFileContent).toBe("fixed C#");
+    } finally {
+      await new Promise((resolve) => fakeModel.close(resolve));
+      await new Promise((resolve) => fakeUnityMcp.close(resolve));
+    }
+  });
 });

@@ -82,6 +82,13 @@ export interface EngineBridge {
   saveScene(): Promise<void>;
   enterPlayMode(): Promise<void>;
   exitPlayMode(): Promise<void>;
+  /**
+   * The fast "did my last edit compile" signal a build/fix repair loop
+   * needs — force a recompile and report whether the result has errors —
+   * not necessarily a full distributable player/export build. See
+   * `UnityBridge.buildProject()`'s doc comment for why those are
+   * deliberately different operations.
+   */
   buildProject(options?: { target?: string }): Promise<BuildResult>;
   captureScreenshot(): Promise<ScreenshotResult>;
   readConsole(options?: { maxMessages?: number }): Promise<ConsoleMessage[]>;

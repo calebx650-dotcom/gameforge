@@ -65,7 +65,10 @@ should be working and tested before the next starts.
       whichever `EngineBridge` the session configured.
 - [x] **Phase 9** — Build/run/test loop. `build_project`, `enter_play_mode`,
       `exit_play_mode` are part of the same tool set above, going through
-      the same `EngineBridge`.
+      the same `EngineBridge`. `UnityBridge.buildProject()`'s mapping onto
+      real `unity-mcp` tools was wrong at the design level until the
+      Working Demo Sprint fixed it — see the "Smaller known gaps" entry
+      below and UNITY_BRIDGE.md for the finding.
 - [x] **Phase 10** — Screenshot capture + vision analysis, actually wired
       into the agent loop. `packages/vision`'s ffmpeg-based extraction,
       `LiveFrameBuffer` real-time ring buffer (the local-first substitute
@@ -285,6 +288,47 @@ pattern.
   back the real value read from a real file, character-for-character
   correct. A small local model reliably using the trimmed set is
   confirmed, not assumed.
+- ~~`UnityBridge.buildProject()` called a tool/action pair
+  (`manage_editor`, `action: "build"`) that doesn't exist in real
+  `mcp-for-unity`~~ — **found and fixed** (Working Demo Sprint), while
+  building the autonomous edit/build/fix repair loop the demo needs.
+  Reading the actual server source (`Editor/Tools/ManageBuild.cs`,
+  `Editor/Tools/RefreshUnity.cs`) showed the real picture: `manage_build`
+  is a separate tool that triggers a full distributable player build via
+  `BuildPipeline.BuildPlayer` — async/pollable, up to 30 minutes, the
+  wrong shape for "did my last script edit compile." The right tool for
+  that is `refresh_unity` (`mode: "force", scope: "scripts", compile:
+  "request", wait_for_ready: true`, which blocks until Unity finishes
+  recompiling) followed by the already-fixed `read_console`.
+  `UnityBridge.buildProject()` now does exactly that and is documented as
+  deliberately *not* covering a real player/export build — seven UNITY_BRIDGE.md
+  explains the scope decision and what a future full-build capability
+  would still need (the `manage_build` async poll protocol). Unit-tested
+  (`unity-bridge.test.ts`, both a clean-console success case and an
+  error-reporting failure case) and exercised through the full real stack
+  in a new `apps/server/src/e2e.test.ts` case that drives a genuine
+  create-file → build_project → error → edit-file → build_project →
+  success repair loop end to end against a fake unity-mcp server speaking
+  this real protocol, asserting both the exact tool-call sequence and that
+  the fixed file content actually lands on disk. Not yet exercised against
+  a live Unity Editor — the earlier `connect()`/`readConsole()` live
+  session (Phase 4) predates this fix; live validation is pending the same
+  way every other "verified against fake server, not yet against real
+  hardware" item in this document is.
+
+  Alongside this fix: `Agent.run()`'s iteration budget is now
+  configurable per chat request (`ChatRequest.maxIterations`,
+  `apps/server/src/chat-socket.ts`) and defaults to 25 instead of `Agent`'s
+  own default of 10 whenever a session has an engine bridge configured —
+  a real edit/recompile/read-console/fix loop routinely needs more turns
+  than a plain file-editing request. The agent's system prompt also gained
+  explicit build/fix-loop guidance: call `build_project` after every
+  meaningful script edit (not just once at the end), read reported errors
+  and fix the specific problem rather than rewriting unrelated code, cap
+  fix attempts at roughly 5 before stopping to explain and ask rather than
+  guessing indefinitely, and never report a feature as "working" from a
+  clean compile alone — use `enter_play_mode`/`read_console` to check for
+  runtime errors before making that claim.
 - Persisting the operation log to disk (currently in-memory per agent run).
 - Generation tool calls block one agent iteration for the whole
   submit-then-poll job duration (bounded by a timeout) rather than exposing
