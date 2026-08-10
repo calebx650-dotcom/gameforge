@@ -54,6 +54,17 @@ body {
 .mode-badge[data-mode="build"] { background: #1f3a2c; color: var(--ok); }
 .mode-badge[data-mode="autonomous"] { background: #3a1f1f; color: var(--danger); }
 
+.build-badge {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.build-badge[data-status="building"] { background: #394150; color: var(--muted); }
+.build-badge[data-status="fixing"] { background: #3a3a1f; color: #e5d34a; }
+.build-badge[data-status="failed"] { background: #3a1f1f; color: var(--danger); }
+.build-badge[data-status="success"] { background: #1f3a2c; color: var(--ok); }
+
 .layout {
   flex: 1;
   display: grid;
@@ -226,6 +237,62 @@ button:disabled {
   text-transform: uppercase;
   font-size: 9px;
   margin-right: 6px;
+}
+
+.build-attempts, .files-changed, .final-result {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.build-attempts h3, .files-changed h3, .final-result h3 {
+  font-size: 12px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 6px;
+}
+.build-attempts ul, .files-changed ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.build-attempt {
+  font-size: 11px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+.build-attempt--building { color: var(--muted); }
+.build-attempt--success { border-color: #2c4a3a; color: var(--ok); }
+.build-attempt--failed { border-color: #4a2c2c; color: var(--danger); }
+.build-errors {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  color: var(--danger);
+  font-size: 10px;
+}
+.files-changed li {
+  font-size: 11px;
+  padding: 4px 8px;
+}
+.file-tool {
+  color: var(--muted);
+  text-transform: uppercase;
+  font-size: 9px;
+  margin-right: 6px;
+}
+.final-result-status {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 0 0 6px;
+}
+.final-result-text {
+  font-size: 12px;
+  white-space: pre-wrap;
+  margin: 0;
 }
 
 .git-diff {

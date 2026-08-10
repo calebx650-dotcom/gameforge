@@ -329,6 +329,28 @@ pattern.
   guessing indefinitely, and never report a feature as "working" from a
   clean compile alone — use `enter_play_mode`/`read_console` to check for
   runtime errors before making that claim.
+
+  The desktop UI's activity panel gained three views derived client-side
+  from that same `OperationLogEntry` stream — no server changes needed,
+  since `tool_call`/`tool_result` entries already carry the real
+  `ToolCall`/`ToolResultMessage` as `detail`
+  (`apps/desktop/src/build-status.ts`): a build-status badge in the title
+  bar (BUILDING/FAILED/FIXING/SUCCESS, with an attempt counter — "fixing"
+  is inferred as a failed attempt followed by more activity before the
+  next build, not a status the server reports explicitly), a "Build
+  Attempts" list showing each attempt's outcome and reported compiler
+  errors, a "Files Changed" list from `create_file`/`edit_file`/
+  `delete_file` calls, and a "Final Result" block once the run completes.
+  Unit-tested (`build-status.test.ts`) against log entries shaped exactly
+  like `Agent.executeAndRecord()`'s real output, mirroring the same
+  create → build → fail → fix → build → succeed sequence
+  `apps/server/src/e2e.test.ts` drives against a real WebSocket
+  connection — proving the derivation reads the real shape, not one
+  invented for the test. Compiles clean (`tsc --noEmit && vite build`);
+  **not yet confirmed rendering correctly in a live browser** — that's
+  planned as part of the live demo walkthrough (real UI verification, not
+  just a compile check, matches this project's established bar from the
+  streaming-UI and Tauri-build verification work).
 - Persisting the operation log to disk (currently in-memory per agent run).
 - Generation tool calls block one agent iteration for the whole
   submit-then-poll job duration (bounded by a timeout) rather than exposing

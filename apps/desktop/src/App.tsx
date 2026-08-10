@@ -3,6 +3,7 @@ import type { AgentMode, ModelInfo, OperationLogEntry, ToolCall } from "@gamefor
 import { ChatSocket, listModels, openProject, type ProjectSummary } from "./api.js";
 import { GitPanel } from "./GitPanel.js";
 import { isKeychainAvailable, keychainDelete, keychainErrorMessage, keychainGet, keychainSet } from "./keychain.js";
+import { deriveBuildAttempts, deriveFilesChanged } from "./build-status.js";
 
 const PROVIDERS = ["ollama", "openai", "openrouter", "anthropic", "openai-compatible"] as const;
 const MODES: AgentMode[] = ["ask", "assist", "build", "autonomous"];
@@ -83,7 +84,22 @@ export function App() {
   const [engine, setEngine] = useState<string>("none");
   const [engineUrl, setEngineUrl] = useState("");
 
+  const [lastResult, setLastResult] = useState<{ finalText: string; stoppedReason: string; iterations: number } | null>(null);
+
   const socketRef = useRef<ChatSocket | null>(null);
+
+  const buildAttempts = deriveBuildAttempts(log);
+  const filesChanged = deriveFilesChanged(log);
+  const latestBuild = buildAttempts[buildAttempts.length - 1];
+  const buildStatus: "idle" | "building" | "failed" | "fixing" | "success" = !latestBuild
+    ? "idle"
+    : latestBuild.status === "building"
+      ? "building"
+      : latestBuild.status === "success"
+        ? "success"
+        : busy
+          ? "fixing"
+          : "failed";
 
   async function handleOpenProject() {
     setProjectError(null);
@@ -112,6 +128,7 @@ export function App() {
     setChat((prev) => [...prev, { role: "user", text: prompt }]);
     setLog([]);
     setStreamingText("");
+    setLastResult(null);
 
     const socket = new ChatSocket({
       onOpen: () => {
@@ -132,6 +149,7 @@ export function App() {
           ...prev,
           { role: "assistant", text: finalText || `(stopped: ${stoppedReason} after ${iterations} iteration(s))` },
         ]);
+        setLastResult({ finalText, stoppedReason, iterations });
         setStreamingText("");
         setBusy(false);
         setGitRefreshSignal((n) => n + 1);
@@ -162,6 +180,14 @@ export function App() {
         <span className="mode-badge" data-mode={mode}>
           {mode.toUpperCase()}
         </span>
+        {buildStatus !== "idle" && (
+          <span className="build-badge" data-status={buildStatus} data-testid="build-status-badge">
+            {buildStatus === "building" && `BUILDING (attempt ${latestBuild.attempt})`}
+            {buildStatus === "fixing" && `FIXING (after attempt ${latestBuild.attempt})`}
+            {buildStatus === "failed" && `BUILD FAILED (attempt ${latestBuild.attempt})`}
+            {buildStatus === "success" && `BUILD SUCCESS (attempt ${latestBuild.attempt})`}
+          </span>
+        )}
       </header>
 
       <div className="layout">
@@ -309,6 +335,49 @@ export function App() {
                 </li>
               ))}
             </ul>
+
+            {buildAttempts.length > 0 && (
+              <div className="build-attempts" data-testid="build-attempts">
+                <h3>Build Attempts</h3>
+                <ul>
+                  {buildAttempts.map((a) => (
+                    <li key={a.attempt} className={`build-attempt build-attempt--${a.status}`}>
+                      Attempt {a.attempt}: {a.status === "building" ? "building…" : a.status}
+                      {a.errors && a.errors.length > 0 && (
+                        <ul className="build-errors">
+                          {a.errors.map((e, i) => (
+                            <li key={i}>{e}</li>
+                          ))}
+                        </ul>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {filesChanged.length > 0 && (
+              <div className="files-changed" data-testid="files-changed">
+                <h3>Files Changed</h3>
+                <ul>
+                  {filesChanged.map((f, i) => (
+                    <li key={i}>
+                      <span className="file-tool">{f.tool}</span> {f.path}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {lastResult && (
+              <div className="final-result" data-testid="final-result">
+                <h3>Final Result</h3>
+                <p className="final-result-status">
+                  Stopped: {lastResult.stoppedReason} after {lastResult.iterations} iteration(s)
+                </p>
+                {lastResult.finalText && <p className="final-result-text">{lastResult.finalText}</p>}
+              </div>
+            )}
           </section>
         </main>
       </div>
