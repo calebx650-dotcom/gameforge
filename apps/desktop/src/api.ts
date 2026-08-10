@@ -68,6 +68,8 @@ export interface ChatSocketCallbacks {
   onResult: (result: { stoppedReason: string; iterations: number; finalText: string }) => void;
   onError: (message: string) => void;
   onOpen?: () => void;
+  /** Incremental assistant text as it's generated — only fires when sendChat's `stream: true` was set. */
+  onStreamDelta?: (text: string) => void;
 }
 
 export class ChatSocket {
@@ -84,6 +86,7 @@ export class ChatSocket {
     const msg = JSON.parse(raw);
     if (msg.type === "log") this.callbacks.onLog(msg.entry);
     else if (msg.type === "approval_request") this.callbacks.onApprovalRequest(msg.requestId, msg.toolCall, msg.reason);
+    else if (msg.type === "stream_delta") this.callbacks.onStreamDelta?.(msg.text);
     else if (msg.type === "result") {
       const finalMessage = msg.messages[msg.messages.length - 1];
       const finalText = typeof finalMessage?.content === "string" ? finalMessage.content : "";
@@ -97,6 +100,7 @@ export class ChatSocket {
     providerSettings: ProviderSettings;
     message: string;
     engineSettings?: { engine: string; url?: string };
+    stream?: boolean;
   }): void {
     this.socket.send(JSON.stringify({ type: "chat", ...input }));
   }

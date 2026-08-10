@@ -1,5 +1,5 @@
 import type { AgentMode, ChatMessage, OperationLogEntry, ToolCall } from "@gameforge/shared";
-import type { LLMProvider } from "@gameforge/llm";
+import type { GenerateResult, LLMProvider } from "@gameforge/llm";
 import { ToolExecutor } from "@gameforge/tools";
 import { buildVideoAnalysisMessage } from "@gameforge/vision";
 
@@ -30,6 +30,17 @@ export interface AgentOptions {
   temperature?: number;
   maxOutputTokens?: number;
   onLogEntry?: (entry: OperationLogEntry) => void;
+  /**
+   * When provided, each iteration calls `provider.stream()` instead of
+   * `generate()` and invokes this with every incremental text chunk as it
+   * arrives, so a caller (e.g. the chat UI) can render the response as it's
+   * generated rather than waiting for the whole turn to finish. The
+   * streamed chunks are still accumulated into the same result shape
+   * `generate()` would have returned, so the rest of the loop (tool
+   * dispatch, message history, logging) is identical either way. Omit this
+   * to keep the non-streaming `generate()` path.
+   */
+  onTextDelta?: (delta: string) => void;
   signal?: AbortSignal;
 }
 
@@ -77,14 +88,17 @@ export class Agent {
         return { messages, log: this.log, iterations: iteration - 1, stoppedReason: "timed_out" };
       }
 
-      const result = await this.options.provider.generate({
+      const generateOptions = {
         model: this.options.model,
         messages,
         tools: this.options.executor.getAvailableTools(),
         temperature: this.options.temperature,
         maxOutputTokens: this.options.maxOutputTokens,
         signal: this.options.signal,
-      });
+      };
+      const result = this.options.onTextDelta
+        ? await collectStreamedResult(this.options.provider.stream(generateOptions), this.options.onTextDelta)
+        : await this.options.provider.generate(generateOptions);
 
       messages.push(result.message);
       this.record({
@@ -167,6 +181,31 @@ export class Agent {
     this.log.push(entry);
     this.options.onLogEntry?.(entry);
   }
+}
+
+/**
+ * Drains an LLMProvider.stream() generator into the same GenerateResult
+ * shape generate() returns, calling onTextDelta as each chunk arrives.
+ * Every provider's stream() only emits toolCalls/usage once, on its final
+ * chunk (see packages/llm's provider implementations), so simply keeping
+ * the latest non-empty value of each is enough to accumulate correctly.
+ */
+async function collectStreamedResult(
+  stream: AsyncGenerator<{ textDelta?: string; toolCalls?: ToolCall[]; usage?: GenerateResult["usage"] }>,
+  onTextDelta: (delta: string) => void,
+): Promise<GenerateResult> {
+  let text = "";
+  let toolCalls: ToolCall[] | undefined;
+  let usage: GenerateResult["usage"];
+  for await (const chunk of stream) {
+    if (chunk.textDelta) {
+      text += chunk.textDelta;
+      onTextDelta(chunk.textDelta);
+    }
+    if (chunk.toolCalls?.length) toolCalls = chunk.toolCalls;
+    if (chunk.usage) usage = chunk.usage;
+  }
+  return { message: { role: "assistant", content: text, toolCalls }, toolCalls, usage };
 }
 
 function summarizeArgs(call: ToolCall): string {

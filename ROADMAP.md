@@ -164,8 +164,24 @@ pattern.
 ## Smaller known gaps, not phase-blocking
 
 - OS-keychain-backed API key storage (currently session-only, see SECURITY.md).
-- Streaming (`LLMProvider.stream()`) is implemented per-provider but not yet
-  wired into the chat UI, which currently uses `generate()`.
+- ~~Streaming implemented per-provider but not wired into the chat UI~~ —
+  **fixed and verified** (Game Forge Local Verification Phase 5).
+  `Agent` gains an optional `onTextDelta` callback (`packages/agent/src/
+  agent.ts`): when set, each iteration calls `provider.stream()` instead of
+  `generate()` and accumulates the chunks into the same result shape, so
+  the rest of the loop (tool dispatch, message history, safety limits) is
+  unchanged either way — fully backward-compatible, opt-in per request.
+  `chat-socket.ts`'s `ChatRequest` gained `stream?: boolean` (default off,
+  so existing non-streaming clients and fake test servers are unaffected);
+  when set, incremental text streams to the client as `stream_delta`
+  WebSocket messages. `apps/desktop` sends `stream: true` and renders a
+  live-updating bubble as text arrives, replaced by the final message on
+  completion. Verified two ways: a new `apps/server/src/e2e.test.ts` case
+  drives the real WebSocket protocol against a fake Ollama server speaking
+  real NDJSON streaming chunks (not a single JSON blob), and a real headless
+  Chromium browser session against the real dev server confirmed the UI
+  genuinely shows partial text before the final result arrives, not just a
+  spinner-then-pop.
 - ~~`OllamaProvider` doesn't send image content~~ — **fixed and verified**
   (Game Forge Local Verification Phase 1). `ImagePart` content now maps to
   Ollama's message-level `images: string[]` array (base64, `data:` prefix

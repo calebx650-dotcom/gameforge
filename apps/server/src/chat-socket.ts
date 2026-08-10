@@ -49,6 +49,14 @@ interface ChatRequest {
   generationSettings?: GenerationSettings;
   engineSettings?: EngineBridgeSettings;
   autonomousLimits?: AutonomousLimits;
+  /**
+   * Opt in to streaming the assistant's text as it's generated (`stream_delta`
+   * WS messages) instead of only receiving the final `result` once the whole
+   * run finishes. Defaults to false so existing non-streaming clients (and
+   * fake test servers that only implement a non-streaming response) are
+   * unaffected.
+   */
+  stream?: boolean;
 }
 
 /**
@@ -235,6 +243,7 @@ export function handleChatConnection(socket: WebSocket, projects: ProjectManager
       maxOutputTokens: request.providerSettings.maxOutputTokens,
       signal: activeAbortController.signal,
       onLogEntry: (entry) => send(socket, { type: "log", entry }),
+      ...(request.stream ? { onTextDelta: (delta: string) => send(socket, { type: "stream_delta", text: delta }) } : {}),
       ...autonomousLimits,
     });
 

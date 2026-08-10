@@ -316,4 +316,82 @@ describe("GameForge end-to-end smoke test", () => {
       await new Promise((resolve) => fakeUnityMcp.close(resolve));
     }
   });
+
+  it("streams incremental assistant text over the WebSocket when the request opts in with stream: true (Phase 5)", async () => {
+    const httpBase = `http://localhost:${gfPort}`;
+
+    // A dedicated fake Ollama server speaking Ollama's real streaming wire
+    // format: newline-delimited JSON chunks, not one bare JSON response —
+    // this is what OllamaProvider.stream() actually parses.
+    const fakeStreamingOllama = createHttpServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        if (req.url === "/api/tags") {
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ models: [{ name: "llama3.1:8b" }] }));
+          return;
+        }
+        if (req.url === "/api/chat") {
+          res.setHeader("Content-Type", "application/x-ndjson");
+          for (const word of ["Streaming ", "works ", "correctly."]) {
+            res.write(JSON.stringify({ message: { content: word }, done: false }) + "\n");
+          }
+          res.write(JSON.stringify({ message: { content: "" }, done: true, prompt_eval_count: 5, eval_count: 5 }) + "\n");
+          res.end();
+          return;
+        }
+        res.statusCode = 404;
+        res.end();
+      });
+    });
+    await new Promise<void>((resolve) => fakeStreamingOllama.listen(0, resolve));
+    const fakeStreamingOllamaPort = (fakeStreamingOllama.address() as AddressInfo).port;
+
+    try {
+      const streamProjectRoot = await mkdtemp(join(tmpdir(), "gf-e2e-stream-"));
+      const openRes = await request(httpBase).post("/api/projects").send({ path: streamProjectRoot });
+      const projectId = openRes.body.id;
+
+      const result = await new Promise<{ deltas: string[]; finalText: string }>((resolve, reject) => {
+        const ws = new WebSocket(`ws://localhost:${gfPort}/ws/chat`);
+        const timeout = setTimeout(() => reject(new Error("streaming e2e timed out")), 10_000);
+        const deltas: string[] = [];
+
+        ws.on("open", () => {
+          ws.send(
+            JSON.stringify({
+              type: "chat",
+              projectId,
+              mode: "build",
+              providerSettings: { provider: "ollama", model: "llama3.1:8b", baseUrl: `http://127.0.0.1:${fakeStreamingOllamaPort}` },
+              message: "Say something.",
+              stream: true,
+            }),
+          );
+        });
+
+        ws.on("message", (raw) => {
+          const msg = JSON.parse(raw.toString());
+          if (msg.type === "stream_delta") {
+            deltas.push(msg.text);
+          } else if (msg.type === "result") {
+            clearTimeout(timeout);
+            const finalMessage = msg.messages[msg.messages.length - 1];
+            ws.close();
+            resolve({ deltas, finalText: finalMessage.content });
+          } else if (msg.type === "error") {
+            clearTimeout(timeout);
+            reject(new Error(msg.message));
+          }
+        });
+      });
+
+      expect(result.deltas.length).toBeGreaterThan(1);
+      expect(result.deltas.join("")).toBe("Streaming works correctly.");
+      expect(result.finalText).toBe("Streaming works correctly.");
+    } finally {
+      await new Promise((resolve) => fakeStreamingOllama.close(resolve));
+    }
+  });
 });

@@ -167,9 +167,10 @@ content pipelines" section.
 - The Tauri shell is scaffolded but not build-verified in this environment
   (missing system webview dependencies) — verified instead via the Vite dev
   server in a headless browser.
-- Streaming responses are implemented in the provider layer but the current UI
-  uses the non-streaming `generate()` path; wiring `stream()` into the chat UI
-  is a good next increment.
+- ~~Streaming responses not wired into the chat UI~~ — fixed; the desktop UI
+  now streams assistant text live (opt-in per request via `stream: true`),
+  verified against both a real NDJSON-streaming fake server and a real
+  headless browser session. See ROADMAP.md's "Smaller known gaps" section.
 - None of the cloud adapters (Meshy, Tripo3D, DeepMotion) or local-first
   adapters (TripoSR, TRELLIS, Blender, MotionGPT, Kokoro, XTTS-v2,
   AudioCraft) have been exercised against a live account or a real running

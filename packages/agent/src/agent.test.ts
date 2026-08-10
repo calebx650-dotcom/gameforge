@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { GenerateOptions } from "@gameforge/shared";
+import type { GenerateChunk, GenerateOptions } from "@gameforge/shared";
 import type { GenerateResult, LLMProvider } from "@gameforge/llm";
 import { ToolExecutor, WorkspaceGuard } from "@gameforge/tools";
 import { Agent } from "./agent.js";
@@ -28,6 +28,35 @@ class ScriptedProvider implements LLMProvider {
 
   async *stream(): AsyncGenerator<never, void, unknown> {
     throw new Error("not used in tests");
+  }
+}
+
+/** Turns each scripted GenerateResult into a small sequence of streamed chunks, splitting text content into token-sized pieces. */
+class StreamingScriptedProvider implements LLMProvider {
+  readonly id = "streaming-scripted";
+  readonly displayName = "Streaming Scripted";
+  readonly supportsVision = false;
+  readonly supportsTools = true;
+  private callIndex = 0;
+
+  constructor(private readonly script: GenerateResult[]) {}
+
+  async listModels() {
+    return [];
+  }
+
+  async generate(): Promise<GenerateResult> {
+    throw new Error("not used in tests");
+  }
+
+  async *stream(_options: GenerateOptions): AsyncGenerator<GenerateChunk, void, unknown> {
+    const result = this.script[Math.min(this.callIndex, this.script.length - 1)];
+    this.callIndex++;
+    const text = typeof result.message.content === "string" ? result.message.content : "";
+    for (const word of text.length ? text.split(/(?<= )/) : []) {
+      yield { textDelta: word };
+    }
+    yield { toolCalls: result.toolCalls, done: true, usage: result.usage };
   }
 }
 
@@ -261,6 +290,48 @@ describe("Agent", () => {
     expect(sentToolNames).not.toContain("generate_3d_model"); // vendor-backed, no provider configured
     expect(sentToolNames).toContain("generate_level_layout"); // pure, always available
     expect(sentToolNames).toEqual(executor.getAvailableTools().map((t) => t.name));
+  });
+
+  it("streams incremental text via onTextDelta when provided, and still drives tool calls to completion", async () => {
+    const root = await makeProject();
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+    const provider = new StreamingScriptedProvider([
+      {
+        message: { role: "assistant", content: "" },
+        toolCalls: [{ id: "1", name: "read_file", arguments: { path: "hello.txt" } }],
+      },
+      { message: { role: "assistant", content: "The file says hello world." } },
+    ]);
+
+    const deltas: string[] = [];
+    const agent = new Agent({
+      provider,
+      model: "m",
+      systemPrompt: "sys",
+      executor,
+      mode: "build",
+      onTextDelta: (delta) => deltas.push(delta),
+    });
+
+    const result = await agent.run([{ role: "user", content: "read the file and tell me what it says" }]);
+
+    expect(result.stoppedReason).toBe("completed");
+    expect(deltas.join("")).toBe("The file says hello world.");
+    const finalMessage = result.messages[result.messages.length - 1];
+    expect(finalMessage.content).toBe("The file says hello world.");
+    expect(result.log.some((e) => e.kind === "tool_call" && e.summary.includes("read_file"))).toBe(true);
+  });
+
+  it("does not call stream() when onTextDelta is omitted (default non-streaming path is unchanged)", async () => {
+    const root = await makeProject();
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+    const provider = new ScriptedProvider([{ message: { role: "assistant", content: "done, non-streaming" } }]);
+
+    const agent = new Agent({ provider, model: "m", systemPrompt: "sys", executor, mode: "build" });
+    const result = await agent.run([{ role: "user", content: "hi" }]);
+
+    expect(result.stoppedReason).toBe("completed");
+    expect(result.messages[result.messages.length - 1].content).toBe("done, non-streaming");
   });
 
   it("stops immediately when the abort signal is already aborted", async () => {

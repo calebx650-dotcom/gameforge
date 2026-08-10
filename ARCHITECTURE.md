@@ -249,8 +249,15 @@ environment. See UNITY_BRIDGE.md.
 `packages/agent/src/agent.ts`: `Agent.run(conversation)` repeats, up to
 `maxIterations` (default 10):
 
-1. Call `provider.generate({ model, messages, tools: executor.getAvailableTools() })`.
-   `tools` is *not* the full, static `TOOL_DEFINITIONS` list — `getAvailableTools()`
+1. Call `provider.generate({ model, messages, tools: executor.getAvailableTools() })`
+   — or, if `AgentOptions.onTextDelta` is set, call `provider.stream()` instead
+   and accumulate its chunks into the same result shape, invoking the
+   callback with each incremental piece of text as it arrives. Everything
+   below this step behaves identically either way; only the caller (e.g.
+   `apps/server`'s chat handler, which forwards each delta to the client as
+   a `stream_delta` WebSocket message when a request opts in with
+   `stream: true`) can tell the difference. `tools` is *not* the full, static
+   `TOOL_DEFINITIONS` list — `getAvailableTools()`
    (`packages/tools/src/tool-scope.ts`) filters it down to what this
    session can actually use: engine tools only if an `EngineBridge` is
    connected, each vendor-backed generation tool only if its specific
@@ -318,8 +325,7 @@ agent's system prompt alongside the project context.
 
 ## What's deliberately not built yet
 
-OS-keychain-backed credential storage (currently session-only), streaming
-wired into the chat UI (per-provider `stream()` exists but the UI still uses
-`generate()`), and a finer-grained per-run filesystem allowlist beyond
-`WorkspaceGuard`'s project-root sandbox. See [ROADMAP.md](ROADMAP.md)'s
-"Smaller known gaps" section.
+OS-keychain-backed credential storage (currently session-only) and a
+finer-grained per-run filesystem allowlist beyond `WorkspaceGuard`'s
+project-root sandbox. See [ROADMAP.md](ROADMAP.md)'s "Smaller known gaps"
+section.

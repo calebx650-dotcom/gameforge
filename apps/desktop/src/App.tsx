@@ -37,6 +37,7 @@ export function App() {
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const [busy, setBusy] = useState(false);
   const [gitRefreshSignal, setGitRefreshSignal] = useState(0);
+  const [streamingText, setStreamingText] = useState("");
 
   const [engine, setEngine] = useState<string>("none");
   const [engineUrl, setEngineUrl] = useState("");
@@ -69,6 +70,7 @@ export function App() {
     setBusy(true);
     setChat((prev) => [...prev, { role: "user", text: prompt }]);
     setLog([]);
+    setStreamingText("");
 
     const socket = new ChatSocket({
       onOpen: () => {
@@ -78,21 +80,25 @@ export function App() {
           providerSettings: { provider, model, baseUrl: baseUrl || undefined, apiKey: apiKey || undefined },
           message: prompt,
           engineSettings: engine !== "none" ? { engine, url: engineUrl || undefined } : undefined,
+          stream: true,
         });
       },
       onLog: (entry) => setLog((prev) => [...prev, entry]),
       onApprovalRequest: (requestId, toolCall, reason) => setPendingApproval({ requestId, toolCall, reason }),
+      onStreamDelta: (text) => setStreamingText((prev) => prev + text),
       onResult: ({ stoppedReason, iterations, finalText }) => {
         setChat((prev) => [
           ...prev,
           { role: "assistant", text: finalText || `(stopped: ${stoppedReason} after ${iterations} iteration(s))` },
         ]);
+        setStreamingText("");
         setBusy(false);
         setGitRefreshSignal((n) => n + 1);
         socket.close();
       },
       onError: (message) => {
         setChat((prev) => [...prev, { role: "activity", text: `Error: ${message}` }]);
+        setStreamingText("");
         setBusy(false);
         setGitRefreshSignal((n) => n + 1);
         socket.close();
@@ -207,6 +213,12 @@ export function App() {
                   <span>{entry.text}</span>
                 </div>
               ))}
+              {busy && streamingText && (
+                <div className="chat-entry chat-entry--assistant chat-entry--streaming" data-testid="streaming-entry">
+                  <span className="chat-role">assistant</span>
+                  <span>{streamingText}</span>
+                </div>
+              )}
             </div>
 
             {pendingApproval && (
