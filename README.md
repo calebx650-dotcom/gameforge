@@ -56,6 +56,12 @@ has been run against a real Editor in this environment — see
 11. In `autonomous` mode, runs are bounded by a wall-clock timeout and a
     file-modification cap (30 minutes / 50 files by default) so an unattended
     run can't run forever or rewrite the whole project unsupervised.
+12. Chat responses stream live (token by token) instead of appearing all at
+    once when the run finishes.
+13. In the native desktop app, "Save to OS Keychain" persists an API key to
+    the real OS credential store (Keychain/Credential Manager/Secret
+    Service) per provider, so it survives app restarts without retyping —
+    opt-in, never automatic, with a "Forget" button to remove it.
 
 ## Repository layout
 
@@ -166,12 +172,13 @@ content pipelines" section.
   extraction path and the real-time `LiveFrameBuffer` relay remain
   library-only, since nothing yet drives a video file or a live frame
   stream as an agent tool.
-- API keys (LLM and cloud generation vendors alike) are typed into the UI
-  per-session; OS keychain-backed storage is not yet wired up (see
-  SECURITY.md). Now that the Tauri build is real-verified, this is
-  implementable (a Rust command using a crate like `keyring` plus a
-  frontend IPC call) rather than blocked on an unbuildable shell — just not
-  done yet.
+- ~~OS keychain-backed API key storage not wired up~~ — implemented and
+  real-verified (the native Tauri window only — the browser-tab dev mode
+  still holds keys in memory for the session, since there's no OS keychain
+  a browser tab can reach). Opt-in per provider via "Save to OS Keychain"
+  in the Provider panel. See ROADMAP.md's "Smaller known gaps" section for
+  what real-hardware verification found and fixed, including a Linux-only
+  fallback for when the Secret Service backend isn't reachable.
 - ~~The Tauri shell is scaffolded but not build-verified~~ — fixed; real
   Linux build verified (Game Forge Local Verification Phase 5). macOS and
   Windows builds remain unverified — see ROADMAP.md.

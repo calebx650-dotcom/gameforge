@@ -154,11 +154,17 @@ workspace restriction, timeouts, and human approval.
   only for the outbound call to that provider; they are never written to the
   operation log, never included in the system prompt, and never passed
   through to `run_command`'s environment (see above).
-- **Not yet implemented**: OS-keychain-backed persistent storage (Keychain
-  on macOS, Credential Manager on Windows, Secret Service on Linux). Today
-  the desktop UI holds keys in memory for the session; nothing persists them
-  to disk. This is called out explicitly rather than left ambiguous — do not
-  assume keys survive a restart yet.
+- **OS-keychain-backed persistent storage** (Keychain on macOS, Credential
+  Manager on Windows, Secret Service — with a kernel-keyutils fallback — on
+  Linux) is implemented and opt-in: keys stay in-memory/session-only unless
+  the user explicitly clicks "Save to OS Keychain" per provider (never
+  persisted automatically), and can be removed with "Forget." This is a
+  native Tauri capability (`apps/desktop/src-tauri/src/lib.rs`'s
+  `keychain_set`/`keychain_get`/`keychain_delete` commands, wrapping the
+  `keyring` crate) — it does not exist in the plain browser-tab dev mode,
+  which still holds keys in memory only for the session, by design (there's
+  no OS keychain a browser tab can reach). See ROADMAP.md's "Smaller known
+  gaps" section for what real-hardware verification of this found and fixed.
 
 ## Git safety
 

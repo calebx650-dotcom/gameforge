@@ -163,9 +163,53 @@ pattern.
 
 ## Smaller known gaps, not phase-blocking
 
-- OS-keychain-backed API key storage (currently session-only, see
-  SECURITY.md). Not implemented yet, but no longer blocked on an
-  unverified Tauri shell — see the Tauri entry below.
+- ~~OS-keychain-backed API key storage~~ — **implemented and real-verified**
+  (Game Forge Local Verification Phase 5). Three new Tauri commands
+  (`keychain_set`/`keychain_get`/`keychain_delete`,
+  `apps/desktop/src-tauri/src/lib.rs`) wrap the `keyring` crate — macOS
+  Keychain, Windows Credential Manager, Linux Secret Service, selected via
+  real per-platform Cargo feature flags (`apple-native` /
+  `windows-native` / `linux-native-sync-persistent` — `keyring` 3.x ships
+  with **zero** default backend features, confirmed live: without an
+  explicit choice, `set_password()` silently no-ops instead of erroring, a
+  real bug caught by the Rust-level test before it ever reached the UI).
+  `apps/desktop/src/keychain.ts` wraps the three commands for the
+  frontend, a no-op outside the native Tauri window (so the plain
+  browser-tab dev mode is unaffected) via `"__TAURI_INTERNALS__" in
+  window` detection. The Provider panel gained "Save to OS Keychain" /
+  "Forget" buttons, keyed per-provider (`llm:${provider}`), and loads a
+  saved key automatically when switching providers.
+
+  Real, live-driven verification (not just `cargo test`): the actual
+  compiled Tauri binary was launched under a virtual display and driven
+  with `xdotool` clicks/keystrokes — typing a key, clicking Save, watching
+  it read back correctly after switching providers away and back (proving
+  real OS-level persistence, not just React state), and clicking Forget
+  and confirming it's genuinely gone. Two real bugs were caught and fixed
+  by this process, not by inspection: (1) the missing default-features bug
+  above, and (2) the frontend's error handler assumed `invoke()` rejects
+  with an `Error` instance — it actually rejects with the plain string a
+  Rust `Result<T, String>` command returns, so `(err as Error).message`
+  was silently `undefined` on every failure until fixed.
+
+  One more real finding, Linux-specific: under a genuine X11 `DISPLAY`
+  (unlike a plain `cargo test` process), libdbus's autolaunch mechanism
+  activates and tries spawning `dbus-launch` to find a Secret Service
+  provider — which fails hard in this sandbox's incomplete headless setup
+  (no GNOME Keyring/KWallet running) instead of gracefully degrading.
+  Added an explicit Linux-only fallback: if the default (Secret
+  Service-preferring) entry fails, retry with an explicitly-constructed
+  kernel-keyutils-backed entry (session-scoped, not disk-persistent
+  across reboots, but still genuine OS-level secure storage, not
+  plaintext) — confirmed live to make Save/Get/Delete all succeed in this
+  environment. On a real desktop Linux session with a running keyring
+  daemon, the primary Secret Service path is expected to just work and
+  the fallback never triggers; that combination (real desktop, real
+  daemon) hasn't been tested here. macOS/Windows use their single native
+  backend with no such fallback needed — untested on those platforms
+  (this sandbox is Linux-only), but Windows Credential Manager in
+  particular has none of Linux's D-Bus-autolaunch complexity, so it's the
+  most likely of the three to "just work" without surprises.
 - ~~The Tauri shell is scaffolded but not build-verified~~ — **fixed and
   verified** (Game Forge Local Verification Phase 5), with two real
   scaffold bugs found and fixed along the way:

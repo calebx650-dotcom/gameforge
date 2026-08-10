@@ -1,7 +1,8 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AgentMode, ModelInfo, OperationLogEntry, ToolCall } from "@gameforge/shared";
 import { ChatSocket, listModels, openProject, type ProjectSummary } from "./api.js";
 import { GitPanel } from "./GitPanel.js";
+import { isKeychainAvailable, keychainDelete, keychainErrorMessage, keychainGet, keychainSet } from "./keychain.js";
 
 const PROVIDERS = ["ollama", "openai", "openrouter", "anthropic", "openai-compatible"] as const;
 const MODES: AgentMode[] = ["ask", "assist", "build", "autonomous"];
@@ -29,6 +30,46 @@ export function App() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [model, setModel] = useState("");
   const [modelsError, setModelsError] = useState<string | null>(null);
+  const [keychainMessage, setKeychainMessage] = useState<string | null>(null);
+  const keychainAvailable = isKeychainAvailable();
+
+  // Switching providers loads whatever key was previously saved to the OS
+  // keychain for that provider (native Tauri window only — a no-op in the
+  // plain browser dev-mode tab), replacing whatever was in the field —
+  // including clearing it when the new provider has no saved key, so a key
+  // typed for the previous provider never lingers and looks like it
+  // applies to this one.
+  useEffect(() => {
+    if (!keychainAvailable) return;
+    let cancelled = false;
+    keychainGet(`llm:${provider}`).then((saved) => {
+      if (!cancelled) setApiKey(saved ?? "");
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [provider]);
+
+  async function handleSaveApiKey() {
+    setKeychainMessage(null);
+    try {
+      await keychainSet(`llm:${provider}`, apiKey);
+      setKeychainMessage(`Saved to OS keychain for "${provider}".`);
+    } catch (err) {
+      setKeychainMessage(`Failed to save: ${keychainErrorMessage(err)}`);
+    }
+  }
+
+  async function handleForgetApiKey() {
+    setKeychainMessage(null);
+    try {
+      await keychainDelete(`llm:${provider}`);
+      setKeychainMessage(`Removed the saved key for "${provider}".`);
+    } catch (err) {
+      setKeychainMessage(`Failed to remove: ${keychainErrorMessage(err)}`);
+    }
+  }
 
   const [mode, setMode] = useState<AgentMode>("assist");
   const [prompt, setPrompt] = useState("");
@@ -155,6 +196,20 @@ export function App() {
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
             />
+            {keychainAvailable ? (
+              <div className="keychain-controls">
+                <button onClick={handleSaveApiKey} disabled={!apiKey}>
+                  Save to OS Keychain
+                </button>
+                <button onClick={handleForgetApiKey}>Forget</button>
+              </div>
+            ) : (
+              <p className="context-summary">
+                OS keychain storage is only available in the native desktop app (not this browser tab) — keys here are
+                session-only.
+              </p>
+            )}
+            {keychainMessage && <p className="context-summary">{keychainMessage}</p>}
             <button onClick={handleRefreshModels}>Refresh Models</button>
             {modelsError && <p className="error">{modelsError}</p>}
             <select value={model} onChange={(e) => setModel(e.target.value)}>

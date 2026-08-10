@@ -31,9 +31,16 @@ Instead:
     approval responses stream back.
 - **`apps/desktop`** is the Tauri-wrapped React/Vite UI. It talks to
   `apps/server` exactly the way a browser tab would — plain `fetch` and
-  `WebSocket`. Tauri's job is only to be a native window + (later) native
-  capabilities the web platform can't reach (OS keychain, native file
-  dialogs). It currently adds no custom Tauri commands.
+  `WebSocket`. Tauri's job is a native window plus native capabilities the
+  web platform can't reach on its own: today, that's OS-keychain-backed
+  credential storage — three custom commands
+  (`keychain_set`/`keychain_get`/`keychain_delete`,
+  `apps/desktop/src-tauri/src/lib.rs`) wrapping the `keyring` crate
+  (macOS Keychain / Windows Credential Manager / Linux Secret Service),
+  called from `apps/desktop/src/keychain.ts` via `@tauri-apps/api`'s
+  `invoke()`. This is opt-in per provider (a "Save to OS Keychain" button
+  in the Provider panel, not automatic) and a clean no-op in the plain
+  browser-tab dev mode, which has no OS keychain to reach.
 
 This is the one deliberate deviation from the spec's literal folder listing,
 and it's what "REST/WebSocket or Tauri IPC as appropriate" in the spec is
@@ -325,7 +332,6 @@ agent's system prompt alongside the project context.
 
 ## What's deliberately not built yet
 
-OS-keychain-backed credential storage (currently session-only) and a
-finer-grained per-run filesystem allowlist beyond `WorkspaceGuard`'s
+A finer-grained per-run filesystem allowlist beyond `WorkspaceGuard`'s
 project-root sandbox. See [ROADMAP.md](ROADMAP.md)'s "Smaller known gaps"
 section.
