@@ -1,10 +1,30 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { UnityBridge } from "./unity-bridge.js";
 
+const SESSION_ID = "test-session-id";
+
+/**
+ * Stands in for a real MCP "Streamable HTTP" server (see mcp-client.test.ts for the
+ * protocol details this mirrors): handles the `initialize`/`notifications/initialized`
+ * handshake McpHttpClient now performs before every real request, then dispatches to
+ * `handler` for the actual tool call.
+ */
 function mockMcpResponse(handler: (body: any) => unknown) {
   globalThis.fetch = vi.fn(async (_url, init) => {
     const body = JSON.parse((init as RequestInit).body as string);
-    return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: handler(body) }), { status: 200 });
+    if (body.method === "initialize") {
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: {} }), {
+        status: 200,
+        headers: { "Mcp-Session-Id": SESSION_ID, "Content-Type": "application/json" },
+      });
+    }
+    if (body.method === "notifications/initialized") {
+      return new Response(null, { status: 202 });
+    }
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: handler(body) }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
   }) as unknown as typeof fetch;
 }
 
@@ -71,22 +91,40 @@ describe("UnityBridge", () => {
   });
 
   it("captures a screenshot from image content", async () => {
-    globalThis.fetch = vi.fn(async (_url, init) => {
-      const body = JSON.parse((init as RequestInit).body as string);
-      return new Response(
-        JSON.stringify({ jsonrpc: "2.0", id: body.id, result: { content: [{ type: "image", text: "base64data" }] } }),
-        { status: 200 },
-      );
-    }) as unknown as typeof fetch;
+    mockMcpResponse(() => ({ content: [{ type: "image", text: "base64data" }] }));
     const bridge = new UnityBridge();
     const screenshot = await bridge.captureScreenshot();
     expect(screenshot.base64Png).toBe("base64data");
   });
 
-  it("reads the console via read_console", async () => {
-    mockMcpResponse(() => ({ content: [{ type: "text", text: JSON.stringify([{ level: "error", message: "NullReferenceException" }]) }] }));
+  it("reads the console via read_console, unwrapping the real {data:[...]} envelope and mapping log types", async () => {
+    let capturedArgs: any;
+    mockMcpResponse((body) => {
+      capturedArgs = body.params.arguments;
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              data: [
+                { type: "Error", message: "NullReferenceException", stackTrace: "at Foo.Bar()" },
+                { type: "Warning", message: "deprecated API", stackTrace: null },
+                { type: "Log", message: "hello" },
+              ],
+            }),
+          },
+        ],
+      };
+    });
     const bridge = new UnityBridge();
     const messages = await bridge.readConsole();
-    expect(messages[0].message).toBe("NullReferenceException");
+
+    expect(capturedArgs).toMatchObject({ action: "get", format: "json" });
+    expect(messages).toEqual([
+      { level: "error", message: "NullReferenceException", stackTrace: "at Foo.Bar()" },
+      { level: "warning", message: "deprecated API", stackTrace: undefined },
+      { level: "log", message: "hello", stackTrace: undefined },
+    ]);
   });
 });

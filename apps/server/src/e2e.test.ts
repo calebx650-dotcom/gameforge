@@ -234,13 +234,25 @@ describe("GameForge end-to-end smoke test", () => {
     await new Promise<void>((resolve) => fakeModel.listen(0, resolve));
     const fakeModelPort = (fakeModel.address() as AddressInfo).port;
 
-    // A fake unity-mcp server speaking the real MCP JSON-RPC-over-HTTP shape.
+    // A fake unity-mcp server speaking the real MCP "Streamable HTTP" shape (verified
+    // live against mcp-for-unity 10.1.2 — see UNITY_BRIDGE.md): the initialize
+    // handshake returns an Mcp-Session-Id header before any tool call is accepted.
     const fakeUnityMcp = createHttpServer((req, res) => {
       let body = "";
       req.on("data", (c) => (body += c));
       req.on("end", () => {
         const rpc = JSON.parse(body);
         res.setHeader("Content-Type", "application/json");
+        if (rpc.method === "initialize") {
+          res.setHeader("Mcp-Session-Id", "fake-session-id");
+          res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: { protocolVersion: "2025-06-18" } }));
+          return;
+        }
+        if (rpc.method === "notifications/initialized") {
+          res.statusCode = 202;
+          res.end();
+          return;
+        }
         if (rpc.method === "tools/list") {
           res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: { tools: [{ name: "capture_screenshot" }] } }));
           return;

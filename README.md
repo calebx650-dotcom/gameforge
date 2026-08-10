@@ -150,11 +150,13 @@ content pipelines" section.
 
 ## Known limitations
 
-- Neither `UnityBridge` nor `GodotBridge` (`packages/engine-bridge`) has
-  been run against a real Unity Editor + `unity-mcp` install or Godot
-  Editor + bridge plugin — both are unit-tested against fake local servers
-  only, since neither engine is installed in this environment. See
-  [UNITY_BRIDGE.md](UNITY_BRIDGE.md).
+- `UnityBridge` (`packages/engine-bridge`) has been run against a real
+  Unity Editor + `unity-mcp` install (`connect()`/`readConsole()`
+  verified live, 2026-08-09); its remaining tool calls (scene/object
+  mutation, play mode, builds, screenshots) and `GodotBridge` in full have
+  not — see [UNITY_BRIDGE.md](UNITY_BRIDGE.md)'s "Real verification
+  results". Both are unit-tested against fake local servers speaking the
+  real protocol regardless.
 - `packages/vision`'s screenshot-analysis path is wired into the agent loop
   (via `EngineBridge.captureScreenshot()`); the static ffmpeg frame
   extraction path and the real-time `LiveFrameBuffer` relay remain

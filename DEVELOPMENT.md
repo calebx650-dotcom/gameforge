@@ -108,16 +108,18 @@ come back malformed, try a model explicitly documented as supporting Ollama's
 ## Connecting an engine bridge (Unity or Godot)
 
 In the GameForge UI's "Engine Bridge" panel, pick `unity` or `godot` and
-optionally override the default URL (`http://127.0.0.1:6400` for Unity,
+optionally override the default URL (`http://127.0.0.1:8080` for Unity,
 `ws://127.0.0.1:6401` for Godot). For Unity, this expects a running
 [CoplayDev/unity-mcp](https://github.com/CoplayDev/unity-mcp) server started
 by the Unity Editor package; for Godot, a bridge plugin speaking GameForge's
 WebSocket command protocol (see [UNITY_BRIDGE.md](UNITY_BRIDGE.md) for the
 `EngineBridge` design and [ARCHITECTURE.md](ARCHITECTURE.md) for the
-implementation). Neither has been exercised against a real Editor in this
-environment — `packages/engine-bridge`'s tests run against fake local
-servers instead, so the wire protocol is verified even without an Editor
-installed here.
+implementation). `UnityBridge` has been exercised against a real Unity
+Editor + `unity-mcp` server (see UNITY_BRIDGE.md's "Real verification
+results"); `GodotBridge` has not. `packages/engine-bridge`'s tests run
+against fake local servers speaking the real protocol either way, so the
+wire protocol is verified on every run even without an Editor installed
+here.
 
 ## Running a local generation model instead of a cloud vendor
 

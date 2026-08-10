@@ -22,20 +22,33 @@ export interface McpClientConfig {
 
 let requestCounter = 0;
 
+const PROTOCOL_VERSION = "2025-06-18";
+const ACCEPT_HEADER = "application/json, text/event-stream";
+
+type JsonRpcEnvelope<T> = { result?: T; error?: { message: string; code?: number } };
+
 /**
- * A minimal client for the Model Context Protocol's JSON-RPC-over-HTTP
- * transport: every call is a `{jsonrpc: "2.0", method, params, id}` POST,
- * every response is `{jsonrpc: "2.0", id, result}` or `{..., error}`.
- * This is the real MCP wire format (the same one `unity-mcp` and any other
- * MCP server speak) — not something specific to Unity. Engine-specific
- * bridges (`UnityBridge`) build on top of this generic client rather than
- * each reimplementing JSON-RPC framing.
+ * A client for the Model Context Protocol's real "Streamable HTTP" transport
+ * (verified 2026-08-09 against a live `mcp-for-unity` 10.1.2 server: real
+ * routes and framing are NOT a bespoke bare-JSON-over-HTTP scheme — see
+ * UNITY_BRIDGE.md's "Real HTTP transport" section for how this was found).
+ * Every server is reached at `${baseUrl}/mcp`, not the bare base URL. A
+ * session must be opened with an `initialize` handshake before any other
+ * call; the server hands back an `Mcp-Session-Id` response header that must
+ * be echoed on every subsequent request. Responses — including ordinary
+ * `tools/list`/`tools/call` results, not just long-lived streams — commonly
+ * come back as a single `text/event-stream` chunk (`event: message\ndata:
+ * {...}`) rather than a bare JSON body, so the client accepts both.
+ * Engine-specific bridges (`UnityBridge`) build on top of this generic
+ * client rather than each reimplementing MCP framing.
  */
 export class McpHttpClient {
-  private readonly baseUrl: string;
+  private readonly mcpUrl: string;
+  private sessionId: string | undefined;
+  private sessionPromise: Promise<void> | undefined;
 
   constructor(config: McpClientConfig) {
-    this.baseUrl = config.baseUrl.replace(/\/$/, "");
+    this.mcpUrl = `${config.baseUrl.replace(/\/$/, "")}/mcp`;
   }
 
   async listTools(): Promise<McpToolInfo[]> {
@@ -47,23 +60,67 @@ export class McpHttpClient {
     return this.request<McpToolCallResult>("tools/call", { name, arguments: args });
   }
 
-  private async request<T>(method: string, params: Record<string, unknown>): Promise<T> {
-    const id = ++requestCounter;
-    let res: Response;
-    try {
-      res = await fetch(this.baseUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
-      });
-    } catch (err) {
-      throw new ProviderError(`Failed to reach MCP server at ${this.baseUrl}: ${(err as Error).message}`, true, err);
+  /** Opens the MCP session (idempotent — safe to call from multiple concurrent requests). */
+  private async ensureSession(): Promise<void> {
+    if (this.sessionId !== undefined) return;
+    if (!this.sessionPromise) this.sessionPromise = this.initializeSession();
+    await this.sessionPromise;
+  }
+
+  private async initializeSession(): Promise<void> {
+    const res = await this.post({
+      jsonrpc: "2.0",
+      id: ++requestCounter,
+      method: "initialize",
+      params: {
+        protocolVersion: PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: { name: "gameforge-engine-bridge", version: "0.1.0" },
+      },
+    });
+    const sessionId = res.headers.get("mcp-session-id");
+    if (!sessionId) {
+      throw new ProviderError(`MCP server at ${this.mcpUrl} did not return a Mcp-Session-Id header from initialize`);
     }
+    const body = await this.readEnvelope<unknown>(res);
+    if (body.error) {
+      throw new ProviderError(`MCP initialize failed: ${body.error.message}`);
+    }
+    this.sessionId = sessionId;
+
+    // Best-effort: the spec expects this notification after initialize, but a server
+    // that doesn't strictly require it shouldn't block the client from proceeding.
+    try {
+      await this.post({ jsonrpc: "2.0", method: "notifications/initialized" });
+    } catch {
+      // Notification failures are non-fatal; subsequent requests will surface real errors.
+    }
+  }
+
+  private async post(body: Record<string, unknown>): Promise<Response> {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Accept: ACCEPT_HEADER,
+    };
+    if (this.sessionId) headers["Mcp-Session-Id"] = this.sessionId;
+
+    try {
+      return await fetch(this.mcpUrl, { method: "POST", headers, body: JSON.stringify(body) });
+    } catch (err) {
+      throw new ProviderError(`Failed to reach MCP server at ${this.mcpUrl}: ${(err as Error).message}`, true, err);
+    }
+  }
+
+  private async request<T>(method: string, params: Record<string, unknown>): Promise<T> {
+    await this.ensureSession();
+
+    const id = ++requestCounter;
+    const res = await this.post({ jsonrpc: "2.0", id, method, params });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       throw new ProviderError(`MCP server returned ${res.status}: ${text}`, res.status >= 500);
     }
-    const body = (await res.json()) as { result?: T; error?: { message: string; code?: number } };
+    const body = await this.readEnvelope<T>(res);
     if (body.error) {
       throw new ProviderError(`MCP call "${method}" failed: ${body.error.message}`);
     }
@@ -71,6 +128,37 @@ export class McpHttpClient {
       throw new ProviderError(`MCP call "${method}" returned no result`);
     }
     return body.result;
+  }
+
+  /**
+   * Reads a JSON-RPC envelope from either framing the Streamable HTTP transport uses:
+   * a bare `application/json` body, or one or more `text/event-stream` SSE frames
+   * (`event: message\ndata: {...}`). Picks the last parseable `data:` payload, which
+   * is the final JSON-RPC response for the single-request/single-response calls this
+   * client makes (as opposed to a long-lived server-initiated stream).
+   */
+  private async readEnvelope<T>(res: Response): Promise<JsonRpcEnvelope<T>> {
+    const contentType = res.headers.get("content-type") ?? "";
+    const text = await res.text();
+    if (!contentType.includes("text/event-stream")) {
+      return text ? (JSON.parse(text) as JsonRpcEnvelope<T>) : {};
+    }
+
+    let lastPayload: JsonRpcEnvelope<T> | undefined;
+    for (const line of text.split("\n")) {
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice("data:".length).trim();
+      if (!data) continue;
+      try {
+        lastPayload = JSON.parse(data) as JsonRpcEnvelope<T>;
+      } catch {
+        // Non-JSON data lines (shouldn't happen for this server) are ignored.
+      }
+    }
+    if (!lastPayload) {
+      throw new ProviderError(`MCP server at ${this.mcpUrl} returned an event stream with no parseable data`);
+    }
+    return lastPayload;
   }
 }
 

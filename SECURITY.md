@@ -99,7 +99,7 @@ touch project files.
 
 The engine bridge's trust boundary is the URL a session configures
 (`engineSettings: { engine, url }` on the WebSocket `chat` request) — by
-default `http://127.0.0.1:6400` (Unity/`unity-mcp`) or
+default `http://127.0.0.1:8080` (Unity/`unity-mcp`) or
 `ws://127.0.0.1:6401` (Godot), always a local process the user started
 themselves, never a remote endpoint GameForge reaches out to on its own.
 There is no authentication on that connection beyond "something is listening

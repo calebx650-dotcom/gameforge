@@ -22,12 +22,14 @@ export interface UnityBridgeConfig {
  * Adapter for CoplayDev/unity-mcp (see UNITY_BRIDGE.md for why this
  * project over a from-scratch bridge). Maps GameForge's generic
  * `EngineBridge` verbs onto unity-mcp's tool set: `manage_scene`,
- * `manage_gameobject`, `manage_editor`, `read_console`. The exact tool
- * names and argument shapes here follow unity-mcp's public documentation
- * as closely as possible but — like the Meshy/Tripo3D/DeepMotion cloud
- * adapters — have not been exercised against a live unity-mcp server or
- * Unity Editor in this environment (neither is installed here). If the
- * real tool surface differs, the fix is confined to this one file.
+ * `manage_gameobject`, `manage_editor`, `read_console`. `connect()` and
+ * `readConsole()` were verified live against a real Unity Editor + running
+ * `unity-mcp` 10.1.2 server on 2026-08-09 (see UNITY_BRIDGE.md's "Real
+ * verification results" — this is where `readConsole()`'s `format: "json"`
+ * requirement and log-type mapping came from). The remaining tool calls
+ * still follow unity-mcp's documented shapes without having been exercised
+ * against a live server; if the real tool surface differs for one of them,
+ * the fix is confined to this one file.
  */
 export class UnityBridge implements EngineBridge {
   readonly id = "unity-mcp";
@@ -37,7 +39,10 @@ export class UnityBridge implements EngineBridge {
   private connected = false;
 
   constructor(config: UnityBridgeConfig = {}) {
-    this.client = new McpHttpClient({ baseUrl: config.baseUrl ?? "http://127.0.0.1:6400" });
+    // 8080 is unity-mcp's real HTTP-transport default (confirmed live 2026-08-09 — see
+    // UNITY_BRIDGE.md). 6400 is the legacy stdio-mode bridge's TCP port, not an HTTP
+    // JSON-RPC listener; McpHttpClient can't talk to it.
+    this.client = new McpHttpClient({ baseUrl: config.baseUrl ?? "http://127.0.0.1:8080" });
   }
 
   async connect(): Promise<void> {
@@ -131,8 +136,29 @@ export class UnityBridge implements EngineBridge {
   }
 
   async readConsole(options: { maxMessages?: number } = {}): Promise<ConsoleMessage[]> {
-    const result = await this.client.callTool("read_console", { action: "get", count: options.maxMessages ?? 50 });
-    const data = JSON.parse(extractText(result)) as ConsoleMessage[];
-    return data;
+    // format:"json" is required to get structured entries — the tool's default/"plain"
+    // format returns raw formatted strings, not {type, message, ...} objects (confirmed
+    // live 2026-08-09 against mcp-for-unity 10.1.2 — see UNITY_BRIDGE.md).
+    const result = await this.client.callTool("read_console", {
+      action: "get",
+      count: options.maxMessages ?? 50,
+      format: "json",
+    });
+    const parsed = JSON.parse(extractText(result)) as {
+      data: Array<{ type: string; message: string; stackTrace?: string | null }>;
+    };
+    return parsed.data.map((entry) => ({
+      level: mapUnityLogType(entry.type),
+      message: entry.message,
+      stackTrace: entry.stackTrace ?? undefined,
+    }));
   }
+}
+
+/** Maps unity-mcp's Unity `LogType` names (`Log`/`Warning`/`Error`/`Exception`/`Assert`) onto `ConsoleMessage["level"]`. */
+function mapUnityLogType(type: string): ConsoleMessage["level"] {
+  const normalized = type.toLowerCase();
+  if (normalized === "warning") return "warning";
+  if (normalized === "error" || normalized === "exception" || normalized === "assert") return "error";
+  return "log";
 }

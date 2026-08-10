@@ -311,7 +311,7 @@ interface EngineBridge {        // packages/engine-bridge
 
 | id | Transport | Notes |
 |---|---|---|
-| `unity` | MCP JSON-RPC over HTTP (`McpHttpClient`) | `UnityBridge` maps the generic verbs onto `unity-mcp`'s tool set (`manage_scene`, `manage_gameobject`, `manage_editor`, `read_console`, `capture_screenshot`). Default `http://127.0.0.1:6400`. |
+| `unity` | MCP "Streamable HTTP" (`McpHttpClient`) | `UnityBridge` maps the generic verbs onto `unity-mcp`'s tool set (`manage_scene`, `manage_gameobject`, `manage_editor`, `read_console`, `capture_screenshot`). Default `http://127.0.0.1:8080`. Real protocol verified live 2026-08-09 against `mcp-for-unity` 10.1.2 — see UNITY_BRIDGE.md. |
 | `godot` | Raw WebSocket, `{id, command, args}`/`{id, result\|error}` | `GodotBridge` talks GameForge's own command protocol (`scene.get_hierarchy`, `editor.play`, ...) via `GodotWsClient`. Default `ws://127.0.0.1:6401`. |
 
 `createEngineBridge(settings: EngineBridgeSettings)` in
@@ -332,8 +332,12 @@ concrete `UnityBridge`/`GodotBridge` instance directly.
    for the pattern; don't mock at the `fetch`/`WebSocket` call level, stand
    up the real protocol.
 
-Neither `UnityBridge` nor `GodotBridge` has been run against a real Editor
-in this environment — see UNITY_BRIDGE.md.
+`UnityBridge` has since been run against a real Unity Editor + `unity-mcp`
+server (2026-08-09) — `connect()` and `readConsole()` verified live,
+uncovering and fixing a real wire-protocol mismatch; see UNITY_BRIDGE.md's
+"Real HTTP transport" and "Real verification results" sections for what was
+found and what's still unverified. `GodotBridge` has not been run against a
+real Editor in this environment.
 
 ## Free, purely local generation tools (no vendor of any kind)
 

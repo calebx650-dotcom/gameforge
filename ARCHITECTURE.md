@@ -215,7 +215,8 @@ one engine:
   `McpHttpClient`, a real MCP JSON-RPC-over-HTTP client (`tools/list`,
   `tools/call`), mapping the generic verbs onto `unity-mcp`'s tool set
   (`manage_scene`, `manage_gameobject`, `manage_editor`, `read_console`,
-  `capture_screenshot`). Default `http://127.0.0.1:6400`.
+  `capture_screenshot`). Default `http://127.0.0.1:8080` (unity-mcp's real
+  HTTP-transport default port, confirmed live — see UNITY_BRIDGE.md).
 - `GodotBridge` talks to a bridge plugin over a *different* transport
   entirely — a raw WebSocket carrying `{id, command, args}` requests and
   `{id, result|error}` responses (`GodotWsClient`), with Godot-flavored

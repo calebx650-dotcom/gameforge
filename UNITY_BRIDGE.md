@@ -3,14 +3,15 @@
 The `GameForgeBridge` integration described here is implemented in
 `packages/engine-bridge` (Phase 7-9) as the `EngineBridge` interface plus
 a `UnityBridge` adapter. `UnityBridge`/`McpHttpClient`'s own package-level
-tests mock `fetch` directly; the one place it's actually exercised against
-a real HTTP JSON-RPC responder standing in for `unity-mcp` is the capstone
-test in `apps/server/src/e2e.test.ts` (corrected here after Game Forge
-Local Verification Phase 4 audited an earlier, overstated claim that the
-package-level tests did this too). There's no Unity Editor in this build
-environment, so none of it has been run against a real Editor +
-`unity-mcp` install. What follows is both the implementation's rationale
-and the parts still open for whoever first runs it against a real Editor.
+tests mock `fetch` directly, standing in for the real protocol documented
+below; the `apps/server/src/e2e.test.ts` capstone test uses a real local
+HTTP responder speaking that same real protocol.
+
+**Real Unity verification (2026-08-09):** this bridge has now been run
+against a genuinely running Unity Editor (6000.5.7f1) with
+CoplayDev/unity-mcp ("MCP for Unity") v10.1.2 actually installed and
+serving — see "Real HTTP transport" below for the protocol details this
+uncovered, and "Real verification results" for what was and wasn't proven.
 
 ## Status
 
@@ -19,12 +20,15 @@ and the parts still open for whoever first runs it against a real Editor.
   `createObject`/`modifyObject`/`modifyTransform`/`modifyComponent`/
   `saveScene`/`enterPlayMode`/`exitPlayMode`/`buildProject`/
   `captureScreenshot`/`readConsole`.
-- `packages/engine-bridge/src/mcp-client.ts` — `McpHttpClient`, a real MCP
-  JSON-RPC-over-HTTP client (`tools/list`, `tools/call`).
+- `packages/engine-bridge/src/mcp-client.ts` — `McpHttpClient`, a real client
+  for the Model Context Protocol's "Streamable HTTP" transport (`tools/list`,
+  `tools/call`, session handshake, SSE-aware response parsing — see below).
 - `packages/engine-bridge/src/unity-bridge.ts` — `UnityBridge`, mapping the
   interface above onto `unity-mcp`'s tool set (`manage_scene`,
   `manage_gameobject`, `manage_editor`, `read_console`, `capture_screenshot`),
-  default `baseUrl` `http://127.0.0.1:6400`.
+  default `baseUrl` `http://127.0.0.1:8080` (unity-mcp's real HTTP-transport
+  default port — confirmed live; not the legacy `6400` stdio-bridge port an
+  earlier version of this doc claimed).
 - `packages/tools/src/engine-tools.ts` — twelve real agent tools dispatching
   through whichever `EngineBridge` the session configured (see
   ARCHITECTURE.md's "Engine bridge" section).
@@ -34,10 +38,93 @@ and the parts still open for whoever first runs it against a real Editor.
   Unity-shaped (see ARCHITECTURE.md) — it talks GameForge's own WebSocket
   command protocol instead of MCP/HTTP.
 
-Everything above is exercised by tests against fake/mocked servers only —
-see the note above on which layer uses a mocked `fetch` vs. a real HTTP
-responder. Nothing has been run against a real Unity Editor or a real
-`unity-mcp` install, since neither is present in this environment.
+## Real HTTP transport (found 2026-08-09, not documented anywhere in unity-mcp's own docs at the time)
+
+An earlier version of `McpHttpClient` assumed a bespoke bare-JSON-over-HTTP
+wire format: POST `{jsonrpc, id, method, params}` straight to the server's
+base URL, expect a bare `{result}`/`{error}` JSON body back. Against a real
+`mcp-for-unity` 10.1.2 server (built on the `fastmcp`/Starlette/uvicorn
+stack, not aiohttp) this produced a persistent, genuine HTTP 404 on every
+path tried — the real routes only became clear after downloading and
+reading the actual PyPI package (`pip install mcpforunityserver`) and then
+confirming each finding against the live process. The real transport is the
+Model Context Protocol's standard **"Streamable HTTP"** transport:
+
+1. **Every request goes to `POST {baseUrl}/mcp`**, not the bare base URL.
+2. **Every request needs `Accept: application/json, text/event-stream`**
+   (in addition to `Content-Type: application/json`) — without it the server
+   returns `406 Not Acceptable`.
+3. **A session must be opened first** with an `initialize` JSON-RPC call.
+   The server's response carries an `Mcp-Session-Id` HTTP header, which the
+   client must echo back as a request header (`Mcp-Session-Id: <id>`) on
+   every subsequent call. There is no bare-JSON-RPC path that skips this —
+   calling `tools/list`/`tools/call` without a valid session ID either 404s
+   or the server silently has nothing to route the call to.
+4. **Responses — including ordinary single-shot `tools/list`/`tools/call`
+   results, not just long-lived streams — commonly come back as a single
+   `text/event-stream` chunk** (`event: message\ndata: {...}`), not a bare
+   JSON body. `res.json()` on such a response throws. A compliant client has
+   to accept both framings.
+5. Sending `notifications/initialized` after `initialize` matches the MCP
+   spec and is what real MCP SDKs do, though this particular server
+   tolerated its absence in testing — `McpHttpClient` sends it anyway,
+   treating failure as non-fatal.
+
+`McpHttpClient` now implements all five points; see its module doc comment
+for the implementation. This is a real, general MCP "Streamable HTTP" client
+now — not something unity-mcp-specific — so it should work unmodified
+against any other MCP server using the same standard transport.
+
+The default port also needed a fix: `http_port = args.http_port or ... or
+8080` in unity-mcp's own `main.py` confirmed **8080** is the actual HTTP
+transport default, not the `6400` this doc previously claimed (`6400` is the
+*legacy stdio-mode* bridge's TCP port — a completely different, non-HTTP
+mechanism `McpHttpClient` was never going to be able to talk to).
+
+## Real verification results (2026-08-09)
+
+Environment: Unity 6000.5.7f1, `com.coplaydev.unity-mcp` 10.1.2 (both the
+Unity-side C# package and the `mcpforunityserver` PyPI package it launches
+via `uvx`), real project at `GameForgeUnityTest`, HTTP transport, port 8080.
+
+- **`createEngineBridge({ engine: "unity", url }).connect()` — passed.**
+  Ran the real `initialize` handshake, obtained a real session ID, called
+  `tools/list` over the real session, got back unity-mcp's real ~29-tool
+  list (`manage_scene`, `manage_gameobject`, `read_console`, etc.).
+- **`readConsole()` — passed, after a real bug fix.** The first live run
+  threw (`messages.slice is not a function`): `read_console`'s default/
+  "plain" format returns `{success, data: string[]}` (raw formatted log
+  lines), not the `ConsoleMessage[]`-shaped array `UnityBridge.readConsole()`
+  assumed. Fixed by passing `format: "json"`, which returns
+  `{success, data: [{type, message, file, line, stackTrace}]}` — `type` is
+  Unity's `LogType` name (`Log`/`Warning`/`Error`/`Exception`/`Assert`),
+  mapped onto `ConsoleMessage["level"]`. Rerunning
+  `scripts/verify-unity-bridge.mjs` afterward returned real console entries
+  from the real Editor (its own `MCP-FOR-UNITY` startup log lines).
+- **Everything else in `UnityBridge`** (`inspectScene`, `createObject`,
+  `modifyObject`/`modifyTransform`/`modifyComponent`, `saveScene`,
+  `enterPlayMode`/`exitPlayMode`, `buildProject`, `captureScreenshot`) is
+  still unverified against a real Editor — only the transport-level fix
+  (which applies to every call) and `readConsole()`'s response-shape fix
+  were exercised live. If any of those tools' argument/response shapes are
+  also wrong, `UNITY_BRIDGE.md`'s "Real HTTP transport" section above shows
+  the working pattern (call the real tool over curl, compare against what
+  the code assumes) for finding out.
+- Getting a Unity-side bridge *session* connected (not just the HTTP server
+  reachable) turned out to be its own small yak-shave: `unity-mcp`'s "Start
+  Server" UI button both starts the local HTTP server process *and* connects
+  a separate Unity-side session that tool calls actually route through —
+  starting only the server left every tool call returning
+  `"Unity session not available; please retry"`. The reliable
+  headless-launch path was enabling `unity-mcp`'s own "Auto-Start on Editor
+  Load" preference (`EditorPrefs` keys `MCPForUnity.UseHttpTransport` /
+  `MCPForUnity.AutoStartOnLoad`) and letting its `[InitializeOnLoad]`
+  handler — which is domain-reload-safe by design — do both steps itself on
+  the next Editor launch, rather than trying to drive `MCPServiceLocator`
+  directly from a `-executeMethod` script (an ad-hoc `EditorApplication.
+  delayCall` subscribed that way gets silently wiped by the domain reload
+  unity-mcp's own startup path triggers). This is a one-time local Editor
+  setup concern, not something `McpHttpClient`/`UnityBridge` need to handle.
 
 ## Why Unity integration came after the non-Unity vertical slice
 
