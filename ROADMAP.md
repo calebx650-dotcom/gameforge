@@ -163,7 +163,37 @@ pattern.
 
 ## Smaller known gaps, not phase-blocking
 
-- OS-keychain-backed API key storage (currently session-only, see SECURITY.md).
+- OS-keychain-backed API key storage (currently session-only, see
+  SECURITY.md). Not implemented yet, but no longer blocked on an
+  unverified Tauri shell — see the Tauri entry below.
+- ~~The Tauri shell is scaffolded but not build-verified~~ — **fixed and
+  verified** (Game Forge Local Verification Phase 5), with two real
+  scaffold bugs found and fixed along the way:
+  - `apps/desktop/src-tauri/icons/` was completely empty — nobody had ever
+    run `tauri icon`. Tauri's `generate_context!()` macro hard-requires
+    `icon.png` to exist regardless of `tauri.conf.json`'s (empty)
+    `bundle.icon` list, so the build failed immediately. Fixed by
+    generating a full icon set (`tauri icon <source.png>`) and committing
+    it, and by populating `bundle.icon` with the real generated paths
+    (leaving it empty additionally broke AppImage bundling specifically,
+    which panics without a square icon to use).
+  - Real build environment: Rust/Cargo were already present in this
+    sandbox (contradicting earlier docs that claimed otherwise — corrected),
+    but the Linux webview dev headers were not (`libwebkit2gtk-4.1-dev`,
+    `libgtk-3-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`,
+    `libxdo-dev`, `libssl-dev`, `patchelf` — Tauri's documented Linux
+    prerequisites). Installing them let `npx tauri build` complete for
+    real, producing a genuine native ELF binary plus installable
+    `.deb`/`.rpm`/`.AppImage` packages (confirmed with `file`/`dpkg-deb
+    --info`, not just "the command exited 0"). The binary was then
+    actually launched under a virtual X display (`Xvfb`) and a screenshot
+    confirmed it renders the real Game Forge UI as a native window — the
+    Project/Provider/Agent Mode/Engine Bridge panels, not a blank or
+    crashed window.
+  - **Still unverified**: macOS and Windows builds (this sandbox is
+    Linux-only) — the Rust/Tauri code itself is cross-platform and the
+    fixes above (icons, `bundle.icon`) apply universally, but the actual
+    `.dmg`/`.msi`/`.exe` build path on those OSes has not been exercised.
 - ~~Streaming implemented per-provider but not wired into the chat UI~~ —
   **fixed and verified** (Game Forge Local Verification Phase 5).
   `Agent` gains an optional `onTextDelta` callback (`packages/agent/src/

@@ -6,10 +6,14 @@
   toolchain needed for the memory package).
 - npm (workspaces are used for the monorepo).
 - Optional, for the native desktop shell: [Tauri prerequisites](https://tauri.app/start/prerequisites/)
-  (Rust toolchain + platform webview libraries — `webkit2gtk` on Linux,
-  WebView2 on Windows, none extra on macOS) and the Tauri CLI
+  (Rust toolchain + platform webview libraries) and the Tauri CLI
   (`npm install -g @tauri-apps/cli` or use the `tauri` script in
-  `apps/desktop/package.json`).
+  `apps/desktop/package.json`). On Linux specifically (real-verified, Game
+  Forge Local Verification Phase 5): `apt install libwebkit2gtk-4.1-dev
+  libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+  libssl-dev patchelf` — this is the actual set that got a real `npx tauri
+  build` to succeed, not a guess from Tauri's docs. Windows needs WebView2
+  (usually already present); macOS needs no extra system libraries.
 - Optional, to actually talk to a local model: [Ollama](https://ollama.com).
 - Optional, for `packages/vision`'s video frame extraction: `ffmpeg` on PATH.
   Its absence is handled gracefully (a clear `FfmpegNotAvailableError`, not a
@@ -90,6 +94,24 @@ npm run tauri dev
 `apps/desktop/src-tauri/tauri.conf.json` points `devUrl` at
 `http://localhost:4311`, so Tauri will start the Vite dev server for you via
 `beforeDevCommand`.
+
+To build real, installable native packages:
+
+```bash
+cd apps/desktop
+npm run tauri build
+```
+
+Real-verified on Linux (Game Forge Local Verification Phase 5): with the
+prerequisites above installed, this produces a genuine ELF binary at
+`src-tauri/target/release/gameforge` plus `.deb`, `.rpm`, and `.AppImage`
+packages under `src-tauri/target/release/bundle/` — confirmed with `file`
+and `dpkg-deb --info`, and the binary was launched under a virtual display
+(`Xvfb`) and screenshotted to confirm it renders the real app UI as a
+native window, not a blank/crashed one. macOS/Windows builds haven't been
+exercised (this was verified on Linux only) — the code is cross-platform
+Rust/Tauri config with no OS-specific logic, so there's no known reason
+they'd differ, but "no known reason" isn't the same as tested.
 
 ## Connecting Ollama
 

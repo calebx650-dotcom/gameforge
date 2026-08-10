@@ -114,10 +114,14 @@ Open `http://localhost:4311` in a browser, enter a project path, open it, pick a
 provider/model, pick a mode, and send a prompt.
 
 To use the Tauri desktop shell instead of a browser tab, see
-[DEVELOPMENT.md](DEVELOPMENT.md) — it requires the Tauri CLI and platform
-webview dependencies that are **not** part of this sandbox's toolchain, so the
-shell is scaffolded but has only been exercised via the browser-facing dev
-server here.
+[DEVELOPMENT.md](DEVELOPMENT.md). This has now been real-build-verified
+(Game Forge Local Verification Phase 5): with the Rust toolchain and Linux
+webview prerequisites installed, `npx tauri build` produces a genuine
+native binary and installable `.deb`/`.rpm`/`.AppImage` packages, launched
+and confirmed rendering the real app UI via a screenshot under a virtual
+display — not just scaffolded and untested. See ROADMAP.md's "Smaller
+known gaps" section for what that verification found and fixed (a missing
+icon asset) and what's still unverified (macOS/Windows builds).
 
 ## Connecting a real LLM
 
@@ -163,10 +167,14 @@ content pipelines" section.
   library-only, since nothing yet drives a video file or a live frame
   stream as an agent tool.
 - API keys (LLM and cloud generation vendors alike) are typed into the UI
-  per-session; OS keychain-backed storage is not yet wired up (see SECURITY.md).
-- The Tauri shell is scaffolded but not build-verified in this environment
-  (missing system webview dependencies) — verified instead via the Vite dev
-  server in a headless browser.
+  per-session; OS keychain-backed storage is not yet wired up (see
+  SECURITY.md). Now that the Tauri build is real-verified, this is
+  implementable (a Rust command using a crate like `keyring` plus a
+  frontend IPC call) rather than blocked on an unbuildable shell — just not
+  done yet.
+- ~~The Tauri shell is scaffolded but not build-verified~~ — fixed; real
+  Linux build verified (Game Forge Local Verification Phase 5). macOS and
+  Windows builds remain unverified — see ROADMAP.md.
 - ~~Streaming responses not wired into the chat UI~~ — fixed; the desktop UI
   now streams assistant text live (opt-in per request via `stream: true`),
   verified against both a real NDJSON-streaming fake server and a real
