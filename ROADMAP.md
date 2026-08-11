@@ -161,10 +161,34 @@ ordered candidate list and let it pick and fall back automatically.
       sees; there's no analogous system for selecting which *project
       files/context* go into a prompt beyond what the model asks for via
       tool calls.
-- [ ] Task planning — **not built.** The agent loop executes turn by turn;
-      there's no explicit plan-then-execute phase or decomposition step.
-- [ ] Requirement tracking — **not built.** Nothing maps "the user asked
-      for X, Y, Z" to a tracked checklist verified at the end of a run.
+- [x] Task planning / requirement tracking — not an enforced separate
+      phase (the agent loop is still turn-by-turn; nothing blocks a run
+      that skips this), but the model now has a real, structured place to
+      put a plan and a checklist instead of that living only in prose:
+      three new always-available tools (`set_plan`, `set_requirements`,
+      `update_requirement_status` — `packages/tools/src/planning-tools.ts`'s
+      `TaskPlanTracker`, one instance per chat request, owned by
+      `ToolExecutor`). `set_requirements` takes the discrete, individually
+      checkable things the user actually asked for and assigns each an id;
+      `update_requirement_status` marks one `"met"`/`"unmet"`/`"pending"`,
+      optionally with a note. `Agent.run()`'s result now includes a
+      `taskPlan` snapshot (empty if the model never used these tools —
+      nothing requires it to) — the system prompt instructs the model to
+      call `set_requirements` early for anything non-trivial, and to only
+      mark something `"met"` after actually verifying it, not from
+      assuming a change worked. Surfaced in the desktop UI's Final Result
+      block as a Plan list and a Requirements checklist with status
+      coloring. Unit-tested at the executor level (real state changes,
+      the always-allowed-even-in-`ask`-mode permission behavior, the
+      "replaces not appends" `set_requirements` semantics, a clear error
+      for an unknown requirement id) and at the `Agent.run()` level (a
+      full set_plan → set_requirements → verify → update_requirement_status
+      sequence ending up in the real result). This is deliberately a
+      recording/bookkeeping mechanism, not a trust mechanism — a
+      requirement marked `"met"` is only as reliable as whatever the model
+      actually checked before saying so; nothing here independently
+      verifies that claim. That's what P2.5's still-open "requirement
+      verification" gap below would need to add.
 
 ## P2.5 — Verification
 
@@ -177,9 +201,14 @@ no unifying verification layer tying them to what was actually requested.
       `mcp-for-unity` exposes `RunTests`/`GetTestJob` tools it could sit on.
 - [x] Screenshot — `capture_screenshot`, spliced into the model's next turn.
 - [x] Console inspection — `read_console`.
-- [ ] Requirement verification — **not built**, same gap as P2's
-      requirement tracking; this is the "did we actually do what was
-      asked" step that would consume that tracked list.
+- [ ] Requirement verification — **still not built**, now that P2 gives it
+      something real to consume: `set_requirements`/`update_requirement_status`
+      (see P2 above) let the model *record* a checklist and *self-report*
+      each item's status, but nothing independently re-checks a `"met"`
+      claim the way, say, a second model call or a deterministic assertion
+      against `read_console`/`enter_play_mode` output could. Self-reported
+      status is real progress over nothing, but it's not the same
+      trust level as an independent check — that gap is still open.
 
 ## P3 — Creation
 

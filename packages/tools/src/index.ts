@@ -22,4 +22,6 @@ export {
 export type { GitStatusResult, GitLogEntry, GitBranchResult, GitCommitResult, CheckpointResult } from "./git-tools.js";
 export { dispatchEngineTool, isEngineTool, ENGINE_TOOL_NAMES } from "./engine-tools.js";
 export { getAvailableTools } from "./tool-scope.js";
+export { TaskPlanTracker } from "./planning-tools.js";
+export type { Requirement, RequirementStatus, TaskPlanSnapshot } from "./planning-tools.js";
 export { GENERATION_TOOL_PROVIDER_KEY } from "./generation-tools.js";

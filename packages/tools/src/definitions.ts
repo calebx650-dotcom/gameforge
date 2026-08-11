@@ -469,6 +469,46 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       required: ["boneMap"],
     },
   },
+  {
+    name: "set_plan",
+    description:
+      "Record your ordered plan for this task as a short list of steps, before making changes on anything non-trivial. Purely internal bookkeeping — visible in the activity log, doesn't touch the project. Calling it again replaces the previous plan (e.g. after re-planning mid-task).",
+    category: "read",
+    mutating: false,
+    parameters: {
+      type: "object",
+      properties: { steps: { type: "array", items: { type: "string" }, description: "Ordered, short step descriptions." } },
+      required: ["steps"],
+    },
+  },
+  {
+    name: "set_requirements",
+    description:
+      "Record the discrete, individually checkable things the user actually asked for, before starting non-trivial work — e.g. a request for 'a stamina bar that drains on sprint and regenerates' becomes separate requirements for the UI bar, the drain behavior, and the regen behavior. Each gets an id back; use update_requirement_status to mark it met/unmet once you've actually verified it, before reporting the task done. Calling this again replaces the whole list, it doesn't append.",
+    category: "read",
+    mutating: false,
+    parameters: {
+      type: "object",
+      properties: { requirements: { type: "array", items: { type: "string" }, description: "One clear, checkable requirement per entry." } },
+      required: ["requirements"],
+    },
+  },
+  {
+    name: "update_requirement_status",
+    description:
+      "Update one requirement's status by the id set_requirements returned. Only mark 'met' after actually verifying it (reading the result, running it, checking the console) — not from assuming a change worked. Use 'unmet' if you've confirmed it's NOT satisfied. Leave 'pending' (the default) for anything not yet checked, rather than guessing.",
+    category: "read",
+    mutating: false,
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "number" },
+        status: { type: "string", enum: ["pending", "met", "unmet"] },
+        note: { type: "string", description: "Optional short note on what you actually observed." },
+      },
+      required: ["id", "status"],
+    },
+  },
 ];
 
 export function findToolDefinition(name: string): ToolDefinition | undefined {

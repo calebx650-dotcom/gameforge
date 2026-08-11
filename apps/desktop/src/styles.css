@@ -295,6 +295,47 @@ button:disabled {
   margin: 0;
 }
 
+.task-plan, .requirements {
+  margin-top: 10px;
+}
+.task-plan h4, .requirements h4 {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 4px;
+}
+.task-plan ol {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 11px;
+}
+.requirements ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.requirement {
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+.requirement--met { border-color: #2c4a3a; color: var(--ok); }
+.requirement--unmet { border-color: #4a2c2c; color: var(--danger); }
+.requirement--pending { color: var(--muted); }
+.requirement-status {
+  text-transform: uppercase;
+  font-size: 9px;
+  margin-right: 6px;
+}
+.requirement-note {
+  color: var(--muted);
+}
+
 .git-diff {
   max-height: 160px;
   overflow-y: auto;

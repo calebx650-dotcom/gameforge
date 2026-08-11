@@ -18,6 +18,7 @@ import { dispatchGenerationTool, isGenerationTool, type GenerationProviders } fr
 import { dispatchEngineTool, isEngineTool } from "./engine-tools.js";
 import { gitStatusTool, gitDiffTool, gitLogTool, gitBranchTool, gitCommitTool } from "./git-tools.js";
 import { getAvailableTools } from "./tool-scope.js";
+import { TaskPlanTracker } from "./planning-tools.js";
 
 export type ApprovalRequest = (call: ToolCall, reason: string) => Promise<boolean>;
 
@@ -28,12 +29,19 @@ export type ApprovalRequest = (call: ToolCall, reason: string) => Promise<boolea
  * implementation. Nothing here bypasses WorkspaceGuard.
  */
 export class ToolExecutor {
+  private readonly taskPlanTracker = new TaskPlanTracker();
+
   constructor(
     private readonly guard: WorkspaceGuard,
     private readonly requestApproval: ApprovalRequest,
     private readonly generationProviders: GenerationProviders = {},
     private readonly engineBridge?: EngineBridge,
   ) {}
+
+  /** The plan/requirements state `set_plan`/`set_requirements`/`update_requirement_status` calls have accumulated so far in this executor's lifetime (one per chat request). */
+  getTaskPlanTracker(): TaskPlanTracker {
+    return this.taskPlanTracker;
+  }
 
   /**
    * The tools this session can actually use, given whichever generation
@@ -122,6 +130,22 @@ export class ToolExecutor {
         return JSON.stringify(await gitBranchTool(this.guard));
       case "git_commit":
         return JSON.stringify(await gitCommitTool(this.guard, String(args.message), args.paths as string[] | undefined));
+      case "set_plan": {
+        this.taskPlanTracker.setPlan((args.steps as string[]) ?? []);
+        return `Plan recorded (${(args.steps as string[])?.length ?? 0} step(s)).`;
+      }
+      case "set_requirements": {
+        const requirements = this.taskPlanTracker.setRequirements((args.requirements as string[]) ?? []);
+        return JSON.stringify(requirements);
+      }
+      case "update_requirement_status": {
+        const requirement = this.taskPlanTracker.updateRequirementStatus(
+          Number(args.id),
+          args.status as "pending" | "met" | "unmet",
+          args.note as string | undefined,
+        );
+        return JSON.stringify(requirement);
+      }
       default:
         if (isGenerationTool(call.name)) {
           return dispatchGenerationTool(call.name, args, this.generationProviders);

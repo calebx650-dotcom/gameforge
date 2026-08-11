@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { AgentMode, ModelInfo, OperationLogEntry, ToolCall } from "@gameforge/shared";
-import { ChatSocket, listModels, openProject, type ProjectSummary } from "./api.js";
+import { ChatSocket, listModels, openProject, type ProjectSummary, type TaskPlan } from "./api.js";
 import { GitPanel } from "./GitPanel.js";
 import { isKeychainAvailable, keychainDelete, keychainErrorMessage, keychainGet, keychainSet } from "./keychain.js";
 import { deriveBuildAttempts, deriveFilesChanged } from "./build-status.js";
@@ -84,7 +84,9 @@ export function App() {
   const [engine, setEngine] = useState<string>("none");
   const [engineUrl, setEngineUrl] = useState("");
 
-  const [lastResult, setLastResult] = useState<{ finalText: string; stoppedReason: string; iterations: number } | null>(null);
+  const [lastResult, setLastResult] = useState<{ finalText: string; stoppedReason: string; iterations: number; taskPlan: TaskPlan } | null>(
+    null,
+  );
 
   const socketRef = useRef<ChatSocket | null>(null);
 
@@ -144,12 +146,12 @@ export function App() {
       onLog: (entry) => setLog((prev) => [...prev, entry]),
       onApprovalRequest: (requestId, toolCall, reason) => setPendingApproval({ requestId, toolCall, reason }),
       onStreamDelta: (text) => setStreamingText((prev) => prev + text),
-      onResult: ({ stoppedReason, iterations, finalText }) => {
+      onResult: ({ stoppedReason, iterations, finalText, taskPlan }) => {
         setChat((prev) => [
           ...prev,
           { role: "assistant", text: finalText || `(stopped: ${stoppedReason} after ${iterations} iteration(s))` },
         ]);
-        setLastResult({ finalText, stoppedReason, iterations });
+        setLastResult({ finalText, stoppedReason, iterations, taskPlan });
         setStreamingText("");
         setBusy(false);
         setGitRefreshSignal((n) => n + 1);
@@ -376,6 +378,31 @@ export function App() {
                   Stopped: {lastResult.stoppedReason} after {lastResult.iterations} iteration(s)
                 </p>
                 {lastResult.finalText && <p className="final-result-text">{lastResult.finalText}</p>}
+
+                {lastResult.taskPlan.plan.length > 0 && (
+                  <div className="task-plan" data-testid="task-plan">
+                    <h4>Plan</h4>
+                    <ol>
+                      {lastResult.taskPlan.plan.map((step, i) => (
+                        <li key={i}>{step}</li>
+                      ))}
+                    </ol>
+                  </div>
+                )}
+
+                {lastResult.taskPlan.requirements.length > 0 && (
+                  <div className="requirements" data-testid="requirements">
+                    <h4>Requirements</h4>
+                    <ul>
+                      {lastResult.taskPlan.requirements.map((r) => (
+                        <li key={r.id} className={`requirement requirement--${r.status}`}>
+                          <span className="requirement-status">{r.status}</span> {r.description}
+                          {r.note && <span className="requirement-note"> — {r.note}</span>}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
             )}
           </section>

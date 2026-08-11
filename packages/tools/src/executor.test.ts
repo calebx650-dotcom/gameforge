@@ -293,4 +293,51 @@ describe("ToolExecutor", () => {
     const withBridge = new ToolExecutor(new WorkspaceGuard(root), async () => true, {}, { isConnected: () => true } as any);
     expect(withBridge.getAvailableTools().some((t) => t.name === "inspect_scene")).toBe(true);
   });
+
+  it("set_plan/set_requirements/update_requirement_status record real state on the executor's TaskPlanTracker, always allowed even in ask mode", async () => {
+    const root = await makeProject();
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+
+    const planResult = await executor.execute({ id: "1", name: "set_plan", arguments: { steps: ["read the file", "edit it"] } }, "ask");
+    expect(planResult.isError).toBeFalsy();
+    expect(executor.getTaskPlanTracker().snapshot().plan).toEqual(["read the file", "edit it"]);
+
+    const reqResult = await executor.execute(
+      { id: "2", name: "set_requirements", arguments: { requirements: ["stamina drains on sprint", "stamina bar is visible"] } },
+      "ask",
+    );
+    expect(reqResult.isError).toBeFalsy();
+    const requirements = JSON.parse(reqResult.content);
+    expect(requirements).toEqual([
+      { id: 1, description: "stamina drains on sprint", status: "pending" },
+      { id: 2, description: "stamina bar is visible", status: "pending" },
+    ]);
+
+    const updateResult = await executor.execute(
+      { id: "3", name: "update_requirement_status", arguments: { id: 1, status: "met", note: "confirmed in play mode" } },
+      "ask",
+    );
+    expect(updateResult.isError).toBeFalsy();
+    expect(JSON.parse(updateResult.content)).toEqual({ id: 1, description: "stamina drains on sprint", status: "met", note: "confirmed in play mode" });
+
+    const snapshot = executor.getTaskPlanTracker().snapshot();
+    expect(snapshot.requirements[0].status).toBe("met");
+    expect(snapshot.requirements[1].status).toBe("pending");
+  });
+
+  it("update_requirement_status reports a clear error for an unknown id instead of throwing uncaught", async () => {
+    const root = await makeProject();
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+    const result = await executor.execute({ id: "1", name: "update_requirement_status", arguments: { id: 99, status: "met" } }, "ask");
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/No requirement with id 99/);
+  });
+
+  it("set_requirements replaces rather than appends on a second call", async () => {
+    const root = await makeProject();
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+    await executor.execute({ id: "1", name: "set_requirements", arguments: { requirements: ["a", "b"] } }, "ask");
+    await executor.execute({ id: "2", name: "set_requirements", arguments: { requirements: ["c"] } }, "ask");
+    expect(executor.getTaskPlanTracker().snapshot().requirements.map((r) => r.description)).toEqual(["c"]);
+  });
 });

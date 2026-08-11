@@ -1,6 +1,6 @@
 import type { AgentMode, ChatMessage, OperationLogEntry, ToolCall } from "@gameforge/shared";
 import type { GenerateResult, LLMProvider } from "@gameforge/llm";
-import { ToolExecutor } from "@gameforge/tools";
+import { ToolExecutor, type TaskPlanSnapshot } from "@gameforge/tools";
 import { buildVideoAnalysisMessage } from "@gameforge/vision";
 
 export interface AgentOptions {
@@ -49,6 +49,16 @@ export interface AgentRunResult {
   log: OperationLogEntry[];
   iterations: number;
   stoppedReason: "completed" | "max_iterations" | "cancelled" | "timed_out" | "file_limit_reached";
+  /**
+   * Whatever plan/requirement bookkeeping the model recorded via
+   * `set_plan`/`set_requirements`/`update_requirement_status` during this
+   * run (see `packages/tools`' `TaskPlanTracker`) — empty if it never
+   * called them, since nothing requires it to. This is the P2 "did the
+   * agent know if it did the right thing" record: a plan alone isn't a
+   * verification claim, but a requirement marked `"met"` is only as
+   * trustworthy as whatever the model actually checked before setting it.
+   */
+  taskPlan: TaskPlanSnapshot;
 }
 
 const DEFAULT_MAX_ITERATIONS = 10;
@@ -77,7 +87,7 @@ export class Agent {
 
     for (let iteration = 1; iteration <= maxIterations; iteration++) {
       if (this.options.signal?.aborted) {
-        return { messages, log: this.log, iterations: iteration - 1, stoppedReason: "cancelled" };
+        return this.buildResult(messages, iteration - 1, "cancelled");
       }
       if (this.options.maxWallClockMs != null && Date.now() - startedAt > this.options.maxWallClockMs) {
         this.record({
@@ -85,7 +95,7 @@ export class Agent {
           kind: "error",
           summary: `Stopped: exceeded wall-clock limit of ${this.options.maxWallClockMs}ms.`,
         });
-        return { messages, log: this.log, iterations: iteration - 1, stoppedReason: "timed_out" };
+        return this.buildResult(messages, iteration - 1, "timed_out");
       }
 
       const generateOptions = {
@@ -110,7 +120,7 @@ export class Agent {
       });
 
       if (!result.toolCalls || result.toolCalls.length === 0) {
-        return { messages, log: this.log, iterations: iteration, stoppedReason: "completed" };
+        return this.buildResult(messages, iteration, "completed");
       }
 
       for (const call of result.toolCalls) {
@@ -121,12 +131,22 @@ export class Agent {
             kind: "error",
             summary: `Stopped: reached the limit of ${this.options.maxFileModifications} file modification(s) for this run.`,
           });
-          return { messages, log: this.log, iterations: iteration, stoppedReason: "file_limit_reached" };
+          return this.buildResult(messages, iteration, "file_limit_reached");
         }
       }
     }
 
-    return { messages, log: this.log, iterations: maxIterations, stoppedReason: "max_iterations" };
+    return this.buildResult(messages, maxIterations, "max_iterations");
+  }
+
+  private buildResult(messages: ChatMessage[], iterations: number, stoppedReason: AgentRunResult["stoppedReason"]): AgentRunResult {
+    return {
+      messages,
+      log: this.log,
+      iterations,
+      stoppedReason,
+      taskPlan: this.options.executor.getTaskPlanTracker().snapshot(),
+    };
   }
 
   private async executeAndRecord(call: ToolCall, messages: ChatMessage[]): Promise<void> {

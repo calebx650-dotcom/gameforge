@@ -347,6 +347,50 @@ describe("Agent", () => {
     expect(result.iterations).toBe(0);
   });
 
+  it("includes the model's set_plan/set_requirements/update_requirement_status calls in the result's taskPlan (P2 requirement tracking)", async () => {
+    const root = await makeProject();
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+    const provider = new ScriptedProvider([
+      {
+        message: { role: "assistant", content: "" },
+        toolCalls: [{ id: "1", name: "set_plan", arguments: { steps: ["read the file", "confirm content"] } }],
+      },
+      {
+        message: { role: "assistant", content: "" },
+        toolCalls: [{ id: "2", name: "set_requirements", arguments: { requirements: ["file says hello"] } }],
+      },
+      {
+        message: { role: "assistant", content: "" },
+        toolCalls: [{ id: "3", name: "read_file", arguments: { path: "hello.txt" } }],
+      },
+      {
+        message: { role: "assistant", content: "" },
+        toolCalls: [{ id: "4", name: "update_requirement_status", arguments: { id: 1, status: "met", note: "read the real file" } }],
+      },
+      { message: { role: "assistant", content: "Confirmed." } },
+    ]);
+
+    const agent = new Agent({ provider, model: "m", systemPrompt: "sys", executor, mode: "build", maxIterations: 10 });
+    const result = await agent.run([{ role: "user", content: "confirm the file" }]);
+
+    expect(result.stoppedReason).toBe("completed");
+    expect(result.taskPlan.plan).toEqual(["read the file", "confirm content"]);
+    expect(result.taskPlan.requirements).toEqual([
+      { id: 1, description: "file says hello", status: "met", note: "read the real file" },
+    ]);
+  });
+
+  it("returns an empty taskPlan when the model never uses the planning tools — nothing requires it to", async () => {
+    const root = await makeProject();
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+    const provider = new ScriptedProvider([{ message: { role: "assistant", content: "done, no planning tools used" } }]);
+
+    const agent = new Agent({ provider, model: "m", systemPrompt: "sys", executor, mode: "build" });
+    const result = await agent.run([{ role: "user", content: "hi" }]);
+
+    expect(result.taskPlan).toEqual({ plan: [], requirements: [] });
+  });
+
   it("forwards its abort signal all the way into an in-flight tool call, not just the top of the loop", async () => {
     // A regression test for the actual gap: the per-iteration `signal.aborted`
     // check alone doesn't help if a *single* tool call itself hangs — the run

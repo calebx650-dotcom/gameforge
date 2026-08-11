@@ -62,10 +62,23 @@ export function restoreGitCheckpoint(projectId: string, hash: string): Promise<{
   return jsonFetch(`/api/projects/${projectId}/git/restore`, { method: "POST", body: JSON.stringify({ hash }) });
 }
 
+/** Mirrors @gameforge/tools' Requirement — defined locally since apps/desktop doesn't depend on that package, just consumes the plain JSON the server sends over the wire. */
+export interface TaskRequirement {
+  id: number;
+  description: string;
+  status: "pending" | "met" | "unmet";
+  note?: string;
+}
+
+export interface TaskPlan {
+  plan: string[];
+  requirements: TaskRequirement[];
+}
+
 export interface ChatSocketCallbacks {
   onLog: (entry: OperationLogEntry) => void;
   onApprovalRequest: (requestId: string, toolCall: ToolCall, reason: string) => void;
-  onResult: (result: { stoppedReason: string; iterations: number; finalText: string }) => void;
+  onResult: (result: { stoppedReason: string; iterations: number; finalText: string; taskPlan: TaskPlan }) => void;
   onError: (message: string) => void;
   onOpen?: () => void;
   /** Incremental assistant text as it's generated — only fires when sendChat's `stream: true` was set. */
@@ -90,7 +103,12 @@ export class ChatSocket {
     else if (msg.type === "result") {
       const finalMessage = msg.messages[msg.messages.length - 1];
       const finalText = typeof finalMessage?.content === "string" ? finalMessage.content : "";
-      this.callbacks.onResult({ stoppedReason: msg.stoppedReason, iterations: msg.iterations, finalText });
+      this.callbacks.onResult({
+        stoppedReason: msg.stoppedReason,
+        iterations: msg.iterations,
+        finalText,
+        taskPlan: msg.taskPlan ?? { plan: [], requirements: [] },
+      });
     } else if (msg.type === "error") this.callbacks.onError(msg.message);
   }
 
