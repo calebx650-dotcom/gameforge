@@ -18,6 +18,7 @@
     { "path": "../../packages/assets3d" },
     { "path": "../../packages/rigging" },
     { "path": "../../packages/audio" },
-    { "path": "../../packages/engine-bridge" }
+    { "path": "../../packages/engine-bridge" },
+    { "path": "../../packages/vision" }
   ]
 }

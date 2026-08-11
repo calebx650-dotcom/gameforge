@@ -81,6 +81,7 @@ export function App() {
   const [gitRefreshSignal, setGitRefreshSignal] = useState(0);
   const [streamingText, setStreamingText] = useState("");
   const [attachedImage, setAttachedImage] = useState<{ data: string; mimeType: string; previewUrl: string } | null>(null);
+  const [attachedVideo, setAttachedVideo] = useState<{ data: string; mimeType: string; fileName: string } | null>(null);
 
   const [engine, setEngine] = useState<string>("none");
   const [engineUrl, setEngineUrl] = useState("");
@@ -136,14 +137,27 @@ export function App() {
     reader.readAsDataURL(file);
   }
 
+  function handleAttachVideo(file: File | undefined) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const commaIndex = dataUrl.indexOf(",");
+      setAttachedVideo({ data: dataUrl.slice(commaIndex + 1), mimeType: file.type || "video/mp4", fileName: file.name });
+    };
+    reader.readAsDataURL(file);
+  }
+
   function handleSend() {
     if (!project || !model || !prompt.trim() || busy) return;
     setBusy(true);
-    setChat((prev) => [...prev, { role: "user", text: attachedImage ? `${prompt} [+ 1 reference image]` : prompt }]);
+    const attachmentNote = [attachedImage && "1 reference image", attachedVideo && "1 reference video"].filter(Boolean).join(" + ");
+    setChat((prev) => [...prev, { role: "user", text: attachmentNote ? `${prompt} [+ ${attachmentNote}]` : prompt }]);
     setLog([]);
     setStreamingText("");
     setLastResult(null);
     const imagesForThisMessage = attachedImage ? [{ data: attachedImage.data, mimeType: attachedImage.mimeType }] : undefined;
+    const videoForThisMessage = attachedVideo ? { data: attachedVideo.data, mimeType: attachedVideo.mimeType } : undefined;
 
     const socket = new ChatSocket({
       onOpen: () => {
@@ -155,6 +169,7 @@ export function App() {
           engineSettings: engine !== "none" ? { engine, url: engineUrl || undefined } : undefined,
           stream: true,
           images: imagesForThisMessage,
+          referenceVideo: videoForThisMessage,
         });
       },
       onLog: (entry) => setLog((prev) => [...prev, entry]),
@@ -182,6 +197,7 @@ export function App() {
     socketRef.current = socket;
     setPrompt("");
     setAttachedImage(null);
+    setAttachedVideo(null);
   }
 
   function respondApproval(approved: boolean) {
@@ -338,6 +354,14 @@ export function App() {
                 </button>
               </div>
             )}
+            {attachedVideo && (
+              <div className="attached-video-preview" data-testid="attached-video-preview">
+                <span>🎬 {attachedVideo.fileName}</span>
+                <button onClick={() => setAttachedVideo(null)} disabled={busy}>
+                  Remove
+                </button>
+              </div>
+            )}
             <div className="chat-input">
               <textarea
                 placeholder="Describe what you want GameForge to build or change…"
@@ -352,6 +376,16 @@ export function App() {
                   accept="image/*"
                   disabled={busy}
                   onChange={(e) => handleAttachImage(e.target.files?.[0])}
+                  style={{ display: "none" }}
+                />
+              </label>
+              <label className="attach-video-button" title="Attach a short reference video — sampled down to a few frames (requires ffmpeg on the server host)">
+                Attach video
+                <input
+                  type="file"
+                  accept="video/*"
+                  disabled={busy}
+                  onChange={(e) => handleAttachVideo(e.target.files?.[0])}
                   style={{ display: "none" }}
                 />
               </label>

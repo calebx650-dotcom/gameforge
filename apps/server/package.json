@@ -20,6 +20,7 @@
     "@gameforge/rigging": "*",
     "@gameforge/shared": "*",
     "@gameforge/tools": "*",
+    "@gameforge/vision": "*",
     "cors": "^2.8.5",
     "express": "^4.21.0",
     "ws": "^8.18.0"

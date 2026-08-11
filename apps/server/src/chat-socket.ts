@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import type { WebSocket } from "ws";
 import type { AgentMode, ChatMessage, ContentPart, ProviderSettings, ToolCall } from "@gameforge/shared";
 import { createProvider, ModelRouter, type RouterCandidate } from "@gameforge/llm";
@@ -10,6 +12,7 @@ import { createText3DProvider, createPBRMaterialProvider, type AssetGenerationSe
 import { createAutoRigProvider, createMotionProvider, type RiggingSettings } from "@gameforge/rigging";
 import { createVoiceProvider, createMusicGenerationProvider, type VoiceSettings } from "@gameforge/audio";
 import { createEngineBridge, type EngineBridgeSettings } from "@gameforge/engine-bridge";
+import { extractFrames, FfmpegNotAvailableError } from "@gameforge/vision";
 import type { ProjectManager } from "./project-manager.js";
 
 /**
@@ -70,6 +73,21 @@ interface ChatRequest {
    * message (the existing behavior, unchanged).
    */
   images?: Array<{ data: string; mimeType: string }>;
+  /**
+   * A short reference video (gameplay clip, a recorded bug repro, motion
+   * reference) to guide this message. Base64 data, no `data:` prefix,
+   * alongside its real MIME type (e.g. `video/mp4`). Unlike a live engine
+   * screenshot or a still reference image, a video can't go to a vision
+   * provider as-is — it's sampled down to a small, bounded set of frames
+   * (see `extractReferenceVideoFrames` below) via the same ffmpeg-based
+   * extraction `packages/vision` already uses for post-hoc capture
+   * analysis, and those frames are spliced into the message as ordinary
+   * `ContentPart` images through the exact same path reference images use.
+   * Requires ffmpeg on PATH; if it's missing, extraction is skipped with a
+   * clear log entry rather than failing the whole chat request — the text
+   * message still goes through.
+   */
+  referenceVideo?: { data: string; mimeType: string };
   systemPromptExtra?: string;
   generationSettings?: GenerationSettings;
   engineSettings?: EngineBridgeSettings;
@@ -107,9 +125,58 @@ function generateRunId(): string {
  * means every existing fake test server/client that only ever sent a
  * string keeps working untouched.
  */
-function buildInitialUserContent(message: string, images: Array<{ data: string; mimeType: string }> | undefined): string | ContentPart[] {
-  if (!images?.length) return message;
-  return [{ type: "text", text: message }, ...images.map((img): ContentPart => ({ type: "image", data: img.data, mimeType: img.mimeType }))];
+function buildInitialUserContent(
+  message: string,
+  images: Array<{ data: string; mimeType: string }> | undefined,
+  videoFrames: ContentPart[] = [],
+): string | ContentPart[] {
+  const imageParts: ContentPart[] = [
+    ...(images ?? []).map((img): ContentPart => ({ type: "image", data: img.data, mimeType: img.mimeType })),
+    ...videoFrames,
+  ];
+  if (!imageParts.length) return message;
+  return [{ type: "text", text: message }, ...imageParts];
+}
+
+const REFERENCE_VIDEO_SAMPLE_FPS = 1;
+const REFERENCE_VIDEO_MAX_FRAMES = 5;
+
+function videoFileExtensionFor(mimeType: string): string {
+  if (mimeType.includes("webm")) return ".webm";
+  if (mimeType.includes("quicktime") || mimeType.includes("mov")) return ".mov";
+  return ".mp4";
+}
+
+/**
+ * Samples a short reference video down to a small, bounded set of PNG
+ * frames (1 fps, 5 frames max — enough to judge composition/motion intent
+ * without ballooning the prompt) and returns them as ordinary image
+ * `ContentPart`s, ready to splice alongside a chat message. Writes the
+ * incoming base64 payload to a real temp file because `extractFrames`
+ * shells out to ffmpeg, which needs a real file path, not an in-memory
+ * buffer; the temp file (and its containing directory) is always cleaned
+ * up, success or failure.
+ *
+ * Degrades gracefully rather than failing the request: if ffmpeg isn't on
+ * PATH, or extraction otherwise fails, this returns no frames plus a clear
+ * `errorMessage` for the caller to log — the text portion of the message
+ * still reaches the model, matching how a provider that can't use vision
+ * content still gets the text (see `images` above).
+ */
+async function extractReferenceVideoFrames(video: { data: string; mimeType: string }): Promise<{ frames: ContentPart[]; errorMessage?: string }> {
+  const dir = await mkdtemp(join(tmpdir(), "gf-refvideo-"));
+  const videoPath = join(dir, `input${videoFileExtensionFor(video.mimeType)}`);
+  try {
+    await writeFile(videoPath, Buffer.from(video.data, "base64"));
+    const extracted = await extractFrames(videoPath, { fps: REFERENCE_VIDEO_SAMPLE_FPS, maxFrames: REFERENCE_VIDEO_MAX_FRAMES });
+    return { frames: extracted.map((frame): ContentPart => ({ type: "image", data: frame.base64Png, mimeType: "image/png" })) };
+  } catch (err) {
+    const message =
+      err instanceof FfmpegNotAvailableError ? err.message : `Failed to extract frames from reference video: ${(err as Error).message}`;
+    return { frames: [], errorMessage: message };
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -391,7 +458,18 @@ export function handleChatConnection(socket: WebSocket, projects: ProjectManager
       ...autonomousLimits,
     });
 
-    const conversation: ChatMessage[] = [{ role: "user", content: buildInitialUserContent(request.message, request.images) }];
+    let referenceVideoFrames: ContentPart[] = [];
+    if (request.referenceVideo) {
+      const { frames, errorMessage } = await extractReferenceVideoFrames(request.referenceVideo);
+      referenceVideoFrames = frames;
+      if (errorMessage) {
+        send(socket, { type: "log", entry: { timestamp: Date.now(), kind: "error", summary: `Reference video frame extraction skipped: ${errorMessage}` } });
+      }
+    }
+
+    const conversation: ChatMessage[] = [
+      { role: "user", content: buildInitialUserContent(request.message, request.images, referenceVideoFrames) },
+    ];
 
     try {
       const result = await agent.run(conversation);

@@ -298,14 +298,42 @@ and a local-first option behind the same interface:
       request with an attached image lands in GameForge's own message
       history *and* is confirmed forwarded onto the real Ollama wire
       request body (`OllamaProvider`'s `images` array mapping).
-- [ ] Video reference input — genuinely out of scope for now, not a small
-      remainder of the item above: a real video pipeline needs frame
-      extraction/sampling and a decision about how many/which frames reach
-      a vision model's context window, a materially different (and
-      heavier) engineering problem than "attach one image." `packages/
-      vision`'s existing ffmpeg-based extraction is the natural foundation
-      for this if it's built later, but wiring it into chat input hasn't
-      been started.
+- [x] Video reference input — built on top of `packages/vision`'s existing
+      ffmpeg-based `extractFrames()` (already used for post-hoc capture
+      analysis) rather than a new extraction pipeline: `ChatRequest.
+      referenceVideo` (`apps/server/src/chat-socket.ts`) takes a base64
+      video attachment; `extractReferenceVideoFrames()` writes it to a real
+      temp file (ffmpeg needs a real file path, not an in-memory buffer),
+      samples it down to a small, bounded set of frames (1 fps, 5 frames
+      max — deliberately conservative so one video attachment can't
+      balloon a prompt's context), and splices the resulting PNG frames
+      into the message through the exact same `ContentPart[]` path
+      reference images already use, so no new provider-side code was
+      needed here either. The temp file and its directory are always
+      cleaned up, success or failure. Answers the "how many/which frames
+      reach the model" design question this item was previously scoped
+      out over: fixed, bounded, evenly-sampled — the same answer
+      `extractFrames()` already gives for post-hoc video analysis, reused
+      rather than redesigned.
+
+      **Degrades honestly rather than silently or by crashing**: if
+      ffmpeg isn't on PATH (true in this project's own CI/sandbox
+      environment — see `packages/vision/src/ffmpeg.test.ts`), extraction
+      is skipped with a clear WS log entry
+      (`Reference video frame extraction skipped: ...`) and the text
+      message still reaches the model, exactly like a vision-incapable
+      provider still getting the text half of a reference image. Proven
+      end-to-end in `apps/server/src/e2e.test.ts` with a test that
+      branches on `isFfmpegAvailable()` at run time: wherever ffmpeg truly
+      isn't installed (this sandbox), it asserts the graceful-degradation
+      log entry and that no image frames reached the local message state;
+      wherever ffmpeg genuinely is installed, it generates a real 2-second
+      synthetic video with ffmpeg's own `lavfi` `testsrc` (no fixture
+      binary checked into the repo) and asserts real extracted frames
+      landed in the actual message sent — both branches are exercised for
+      real, not stubbed. The desktop UI gained a basic "Attach video"
+      control mirroring the existing reference-image attach control
+      (file picker, filename shown once attached, cleared after sending).
 - [x] Multimodal workflows — narrower than it used to be: multimodal
       *input* exists in two real forms (a captured engine screenshot
       spliced in automatically, P0; a user-attached reference image,

@@ -121,6 +121,8 @@ export class ChatSocket {
     stream?: boolean;
     /** Reference images attached to this message — see ChatRequest.images on the server. */
     images?: Array<{ data: string; mimeType: string }>;
+    /** A reference video attached to this message — see ChatRequest.referenceVideo on the server. */
+    referenceVideo?: { data: string; mimeType: string };
   }): void {
     this.socket.send(JSON.stringify({ type: "chat", ...input }));
   }
