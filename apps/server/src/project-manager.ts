@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { MemoryStore } from "@gameforge/memory";
 import { scanProject, type ProjectContext } from "@gameforge/project";
 import { WorkspaceGuard } from "@gameforge/tools";
+import { RunLogStore } from "./run-log-store.js";
 
 export interface ProjectSession {
   id: string;
@@ -11,6 +12,7 @@ export interface ProjectSession {
   guard: WorkspaceGuard;
   memory: MemoryStore;
   context: ProjectContext;
+  runLogs: RunLogStore;
 }
 
 /**
@@ -38,6 +40,7 @@ export class ProjectManager {
       guard: new WorkspaceGuard(root),
       memory: new MemoryStore(join(gameforgeDir, "memory.sqlite3")),
       context: await scanProject(root),
+      runLogs: new RunLogStore(join(gameforgeDir, "logs")),
     };
     this.sessions.set(id, session);
     return session;

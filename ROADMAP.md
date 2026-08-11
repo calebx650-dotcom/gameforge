@@ -433,8 +433,30 @@ and a local-first option behind the same interface:
       live environment with a real Unity Editor/Ollama install this
       sandbox doesn't have — see the live-verification caveats throughout
       this document.
-- [ ] Logging — the operation log is in-memory per agent run only, not
-      persisted to disk.
+- [x] Logging — `RunLogStore` (`apps/server/src/run-log-store.ts`) persists
+      every run's `OperationLogEntry` stream to `.gameforge/logs/
+      <runId>.jsonl`, one file per run, one JSON entry per line so a
+      partial write (crash mid-run) still leaves every prior line
+      readable. `chat-socket.ts`'s `onLogEntry` hook queues each entry
+      onto the same per-request write chain that already streams it to
+      the client over the socket — queued, not truly fire-and-forget:
+      writes are chained in order and the whole chain is awaited once,
+      right before the run reports itself done, so the on-disk log is
+      genuinely complete by the time a caller could go looking for it.
+      **A real bug this caught, not a hypothetical**: the first version
+      really was fire-and-forget (`.append(...).catch(() => {})`, nothing
+      awaited), and the first attempt at an end-to-end test — reading the
+      log file immediately after receiving the "run done" message — hit a
+      real `ENOENT`, proving the file wasn't reliably written yet by the
+      time the client was told the run was finished. Read access: two new
+      REST endpoints (`GET /projects/:id/runs`, `GET /projects/:id/runs/
+      :runId`), and the `result` WS message now includes the real `runId`
+      so a client can look a run up later. Unit-tested (`run-log-store.
+      test.ts`): append/read-back ordering, separate files per run, an
+      unrecorded run reading back empty rather than throwing, listing.
+      Proven end-to-end: a real chat run over a real WebSocket connection,
+      reading the actual file back off disk afterward (not just through
+      the API) and confirming the API and the raw file agree.
 - [ ] Installer — Tauri build verified on Linux only (Phase 5); macOS/
       Windows packaging unexercised.
 - [x] Documentation — README/ARCHITECTURE/SECURITY/PROVIDERS/

@@ -763,4 +763,57 @@ describe("GameForge end-to-end smoke test", () => {
       await new Promise((resolve) => fakeMemoryOllama.close(resolve));
     }
   });
+
+  it("persists the real operation log to disk as the run happens (P4 log persistence)", async () => {
+    const httpBase = `http://localhost:${gfPort}`;
+    const logProjectRoot = await mkdtemp(join(tmpdir(), "gf-e2e-runlog-"));
+    const openRes = await request(httpBase).post("/api/projects").send({ path: logProjectRoot });
+    const projectId = openRes.body.id;
+
+    const runId = await new Promise<string>((resolve, reject) => {
+      const ws = new WebSocket(`ws://localhost:${gfPort}/ws/chat`);
+      const timeout = setTimeout(() => reject(new Error("run-log persistence e2e timed out")), 10_000);
+      ws.on("open", () => {
+        ws.send(
+          JSON.stringify({
+            type: "chat",
+            projectId,
+            mode: "ask",
+            providerSettings: { provider: "ollama", model: "llama3.1:8b", baseUrl: `http://127.0.0.1:${fakeOllamaPort}` },
+            message: "hello",
+          }),
+        );
+      });
+      ws.on("message", (raw) => {
+        const msg = JSON.parse(raw.toString());
+        if (msg.type === "result") {
+          clearTimeout(timeout);
+          ws.close();
+          resolve(msg.runId);
+        } else if (msg.type === "error") {
+          clearTimeout(timeout);
+          reject(new Error(msg.message));
+        }
+      });
+    });
+
+    expect(runId).toBeTruthy();
+    // Reads the real file straight off disk — the actual persistence this feature
+    // provides, not just something the API layer reports back.
+    const logFilePath = join(logProjectRoot, ".gameforge", "logs", `${runId}.jsonl`);
+    const raw = await readFile(logFilePath, "utf-8");
+    const entries = raw
+      .split("\n")
+      .filter((line) => line.trim())
+      .map((line) => JSON.parse(line));
+
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries.some((e) => e.kind === "message")).toBe(true);
+
+    // Also reachable through the REST API, not just directly on disk.
+    const runsRes = await request(httpBase).get(`/api/projects/${projectId}/runs`);
+    expect(runsRes.body).toContain(runId);
+    const runRes = await request(httpBase).get(`/api/projects/${projectId}/runs/${runId}`);
+    expect(runRes.body).toEqual(entries);
+  });
 });

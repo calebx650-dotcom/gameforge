@@ -115,4 +115,29 @@ describe("REST API", () => {
     const res = await request(app).post(`/api/projects/${id}/git/restore`).send({ hash: "not-a-hash!" });
     expect(res.status).toBe(400);
   });
+
+  it("lists and reads back real persisted run logs (P4 log persistence)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "gf-route-runlogs-"));
+    const { app, projects } = createApp();
+    const openRes = await request(app).post("/api/projects").send({ path: root });
+    const id = openRes.body.id;
+
+    const session = projects.get(id)!;
+    await session.runLogs.append("run-1", { timestamp: 1, kind: "message", summary: "hello from run 1" });
+    await session.runLogs.append("run-2", { timestamp: 2, kind: "tool_call", summary: "read_file(...)" });
+
+    const listRes = await request(app).get(`/api/projects/${id}/runs`);
+    expect(listRes.status).toBe(200);
+    expect(listRes.body.sort()).toEqual(["run-1", "run-2"]);
+
+    const readRes = await request(app).get(`/api/projects/${id}/runs/run-1`);
+    expect(readRes.status).toBe(200);
+    expect(readRes.body).toEqual([{ timestamp: 1, kind: "message", summary: "hello from run 1" }]);
+  });
+
+  it("returns 404 for run-log endpoints on an unknown project", async () => {
+    const { app } = createApp();
+    expect((await request(app).get("/api/projects/nonexistent/runs")).status).toBe(404);
+    expect((await request(app).get("/api/projects/nonexistent/runs/run-1")).status).toBe(404);
+  });
 });

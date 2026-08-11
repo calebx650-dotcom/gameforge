@@ -154,6 +154,27 @@ export function createRouter(projects: ProjectManager): Router {
     }
   });
 
+  // Persisted run logs (P4) — one JSONL file per chat run under
+  // .gameforge/logs/, written as it happens by chat-socket.ts's
+  // onLogEntry hook. Read-only REST access; nothing writes through here.
+  router.get("/projects/:id/runs", async (req, res) => {
+    const session = projects.get(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    res.json(await session.runLogs.listRuns());
+  });
+
+  router.get("/projects/:id/runs/:runId", async (req, res) => {
+    const session = projects.get(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    res.json(await session.runLogs.readRun(req.params.runId));
+  });
+
   router.post("/providers/models", async (req, res) => {
     const { provider, baseUrl, apiKey } = req.body ?? {};
     if (typeof provider !== "string") {

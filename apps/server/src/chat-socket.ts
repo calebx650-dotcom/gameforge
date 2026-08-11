@@ -94,6 +94,11 @@ interface ChatRequest {
 
 const DEFAULT_ENGINE_MAX_ITERATIONS = 25;
 
+/** Timestamp-prefixed so RunLogStore.listRuns()'s lexicographic sort is also chronological order. */
+function generateRunId(): string {
+  return `${Date.now()}-${randomUUID().slice(0, 8)}`;
+}
+
 /**
  * Plain text (the existing, unchanged shape) when there are no attached
  * images; a `ContentPart[]` array — text first, then each image — when
@@ -295,6 +300,12 @@ export function handleChatConnection(socket: WebSocket, projects: ProjectManager
     }
 
     activeAbortController = new AbortController();
+    const runId = generateRunId();
+    // Persists each log entry in order without blocking the live WS send that
+    // happens alongside it — but awaited once, right before reporting the run
+    // as done (below), so the on-disk log is genuinely complete by then, not
+    // a fire-and-forget best-effort that might still be mid-write.
+    let logWriteQueue: Promise<void> = Promise.resolve();
 
     const checkpoint = await maybeCreateCheckpoint(session.guard, request.mode, request.message.slice(0, 72));
     if (checkpoint.created) {
@@ -356,7 +367,14 @@ export function handleChatConnection(socket: WebSocket, projects: ProjectManager
       temperature: request.providerSettings.temperature,
       maxOutputTokens: request.providerSettings.maxOutputTokens,
       signal: activeAbortController.signal,
-      onLogEntry: (entry) => send(socket, { type: "log", entry }),
+      onLogEntry: (entry) => {
+        send(socket, { type: "log", entry });
+        // Queued, not fire-and-forget: chained onto the prior write so entries land in
+        // order and are guaranteed flushed once logWriteQueue is awaited below, while
+        // still never blocking the live WS send above. One JSONL file per run under
+        // .gameforge/logs/ — see run-log-store.ts.
+        logWriteQueue = logWriteQueue.then(() => session.runLogs.append(runId, entry)).catch(() => {});
+      },
       ...(request.stream ? { onTextDelta: (delta: string) => send(socket, { type: "stream_delta", text: delta }) } : {}),
       ...(maxIterations != null ? { maxIterations } : {}),
       ...autonomousLimits,
@@ -372,8 +390,10 @@ export function handleChatConnection(socket: WebSocket, projects: ProjectManager
         iterations: result.iterations,
         requirementsSummary: summarizeRequirements(result.taskPlan.requirements),
       });
-      send(socket, { type: "result", ...result });
+      await logWriteQueue;
+      send(socket, { type: "result", runId, ...result });
     } catch (err) {
+      await logWriteQueue;
       send(socket, { type: "error", message: (err as Error).message });
     }
   }
