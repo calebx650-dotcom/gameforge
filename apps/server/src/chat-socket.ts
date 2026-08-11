@@ -361,6 +361,12 @@ export function handleChatConnection(socket: WebSocket, projects: ProjectManager
 
     try {
       const result = await agent.run(conversation);
+      session.memory.recordRun({
+        requestSummary: request.message.slice(0, 200),
+        stoppedReason: result.stoppedReason,
+        iterations: result.iterations,
+        requirementsSummary: summarizeRequirements(result.taskPlan.requirements),
+      });
       send(socket, { type: "result", ...result });
     } catch (err) {
       send(socket, { type: "error", message: (err as Error).message });
@@ -370,7 +376,23 @@ export function handleChatConnection(socket: WebSocket, projects: ProjectManager
 
 function memoryAndProjectSummary(session: ReturnType<ProjectManager["get"]>): string {
   if (!session) return "";
-  return [summarizeProjectContext(session.context), "", "PROJECT MEMORY:", session.memory.summarize()].join("\n");
+  return [
+    summarizeProjectContext(session.context),
+    "",
+    "PROJECT MEMORY:",
+    session.memory.summarize(),
+    "",
+    "RECENT RUN HISTORY (what you or a prior run already tried on this project — check before repeating work):",
+    session.memory.summarizeRunHistory(),
+  ].join("\n");
+}
+
+/** "2 met, 1 unmet, 3 pending" — omitted entirely (not "0 met, 0 unmet, 0 pending") when the run never used the planning tools, since that's a materially different fact from "used them and nothing was resolved yet." */
+function summarizeRequirements(requirements: { status: string }[]): string | undefined {
+  if (requirements.length === 0) return undefined;
+  const counts = { met: 0, unmet: 0, pending: 0 } as Record<string, number>;
+  for (const r of requirements) counts[r.status] = (counts[r.status] ?? 0) + 1;
+  return `${counts.met} met, ${counts.unmet} unmet, ${counts.pending} pending`;
 }
 
 function send(socket: WebSocket, payload: unknown): void {

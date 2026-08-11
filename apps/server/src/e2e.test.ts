@@ -688,4 +688,79 @@ describe("GameForge end-to-end smoke test", () => {
       await new Promise((resolve) => fakeVisionOllama.close(resolve));
     }
   });
+
+  it("carries a real prior run's outcome into the next run's system prompt on the same project (P3.5 agent memory)", async () => {
+    const httpBase = `http://localhost:${gfPort}`;
+    const capturedSystemPrompts: string[] = [];
+
+    const fakeMemoryOllama = createHttpServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        if (req.url === "/api/tags") {
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ models: [{ name: "llama3.1:8b" }] }));
+          return;
+        }
+        if (req.url === "/api/chat") {
+          const parsed = JSON.parse(body);
+          capturedSystemPrompts.push(parsed.messages[0].content);
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ message: { content: "ok" }, prompt_eval_count: 1, eval_count: 1 }));
+          return;
+        }
+        res.statusCode = 404;
+        res.end();
+      });
+    });
+    await new Promise<void>((resolve) => fakeMemoryOllama.listen(0, resolve));
+    const fakeMemoryOllamaPort = (fakeMemoryOllama.address() as AddressInfo).port;
+
+    function sendOneChatMessage(projectId: string, message: string): Promise<void> {
+      return new Promise((resolve, reject) => {
+        const ws = new WebSocket(`ws://localhost:${gfPort}/ws/chat`);
+        const timeout = setTimeout(() => reject(new Error("memory e2e timed out")), 10_000);
+        ws.on("open", () => {
+          ws.send(
+            JSON.stringify({
+              type: "chat",
+              projectId,
+              mode: "ask",
+              providerSettings: { provider: "ollama", model: "llama3.1:8b", baseUrl: `http://127.0.0.1:${fakeMemoryOllamaPort}` },
+              message,
+            }),
+          );
+        });
+        ws.on("message", (raw) => {
+          const msg = JSON.parse(raw.toString());
+          if (msg.type === "result") {
+            clearTimeout(timeout);
+            ws.close();
+            resolve();
+          } else if (msg.type === "error") {
+            clearTimeout(timeout);
+            reject(new Error(msg.message));
+          }
+        });
+      });
+    }
+
+    try {
+      const memoryProjectRoot = await mkdtemp(join(tmpdir(), "gf-e2e-memory-"));
+      const openRes = await request(httpBase).post("/api/projects").send({ path: memoryProjectRoot });
+      const projectId = openRes.body.id;
+
+      await sendOneChatMessage(projectId, "first request: add a jump button");
+      await sendOneChatMessage(projectId, "second request: what did we just do?");
+
+      expect(capturedSystemPrompts).toHaveLength(2);
+      // The FIRST run's own system prompt shouldn't already know about itself.
+      expect(capturedSystemPrompts[0]).toContain("(no prior runs recorded for this project)");
+      // The SECOND run's system prompt should carry the first run's real recorded outcome.
+      expect(capturedSystemPrompts[1]).toContain("first request: add a jump button");
+      expect(capturedSystemPrompts[1]).toContain("completed");
+    } finally {
+      await new Promise((resolve) => fakeMemoryOllama.close(resolve));
+    }
+  });
 });

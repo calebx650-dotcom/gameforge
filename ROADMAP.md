@@ -317,9 +317,28 @@ and a local-first option behind the same interface:
 
 - [x] Multi-step tasks — the agent loop is inherently multi-step within a
       single run.
-- [ ] Agent memory — **partial.** `packages/memory` is project memory
-      (facts about the project), not agent memory (what the agent itself
-      has tried/learned across runs).
+- [x] Agent memory — the real gap was exactly the one identified: `packages/
+      memory`'s existing `MemoryStore` held project facts, never what the
+      agent itself had tried across separate runs. It now also records run
+      *history*: `MemoryStore.recordRun()` (new `run_history` SQLite table,
+      same per-project database) logs each run's request summary, real
+      `stoppedReason`, iteration count, and a derived requirements summary
+      (`"2 met, 1 unmet, 0 pending"`, omitted entirely — not shown as
+      zeroes — when a run never used the planning tools). `apps/server/src/
+      chat-socket.ts` calls this once per chat request right after
+      `agent.run()` settles, and splices `summarizeRunHistory()`'s
+      chronological summary into every future system prompt for that
+      project, right below the existing project-memory summary, so a new
+      run can see what a prior one already tried instead of repeating it
+      blind. Unit-tested (`store.test.ts`): real id/timestamp on record,
+      most-recent-first ordering, chronological summary text, and the
+      empty-history case. Proven end-to-end in `apps/server/src/
+      e2e.test.ts`: two real sequential chat requests against the same
+      project over real WebSocket connections — the first run's system
+      prompt correctly shows no history yet, the second run's system
+      prompt genuinely contains the first run's real recorded request and
+      outcome, captured from the actual wire request sent to the fake
+      Ollama server, not just asserted against local state.
 - [x] Long-running jobs — autonomous mode's wall-clock timeout and
       file-modification cap (Phase 11).
 - [x] Human approval — the mode-gated permission system, required for

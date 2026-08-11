@@ -26,6 +26,24 @@ export interface MemoryEntry {
   updatedAt: number;
 }
 
+export interface RunHistoryEntry {
+  id: number;
+  startedAt: number;
+  /** The user's request for this run, truncated — enough to recognize what was asked, not the full text. */
+  requestSummary: string;
+  stoppedReason: string;
+  iterations: number;
+  /** e.g. "2 met, 1 unmet, 0 pending" — derived from Agent.run()'s taskPlan.requirements, omitted if the run never used the planning tools. */
+  requirementsSummary?: string;
+}
+
+export interface RecordRunInput {
+  requestSummary: string;
+  stoppedReason: string;
+  iterations: number;
+  requirementsSummary?: string;
+}
+
 /**
  * Project-level memory backed by SQLite (Node's built-in node:sqlite —
  * no native module to compile, which keeps this package trivially
@@ -45,6 +63,14 @@ export class MemoryStore {
         content TEXT NOT NULL,
         createdAt INTEGER NOT NULL,
         updatedAt INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS run_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        startedAt INTEGER NOT NULL,
+        requestSummary TEXT NOT NULL,
+        stoppedReason TEXT NOT NULL,
+        iterations INTEGER NOT NULL,
+        requirementsSummary TEXT
       );
     `);
   }
@@ -86,6 +112,49 @@ export class MemoryStore {
     }
     return Array.from(byCategory.entries())
       .map(([category, items]) => `${category}:\n${items.map((i) => `  - ${i}`).join("\n")}`)
+      .join("\n");
+  }
+
+  /**
+   * Records one `Agent.run()`'s outcome — the P3.5 "agent memory" gap:
+   * `list()`/`summarize()` above are *project* memory (facts about the
+   * codebase), not memory of what the agent itself has tried across
+   * separate runs. Called once per chat request after the run settles
+   * (see `apps/server/src/chat-socket.ts`), never mid-run.
+   */
+  recordRun(input: RecordRunInput): RunHistoryEntry {
+    const startedAt = Date.now();
+    const stmt = this.db.prepare(
+      "INSERT INTO run_history (startedAt, requestSummary, stoppedReason, iterations, requirementsSummary) VALUES (?, ?, ?, ?, ?)",
+    );
+    const result = stmt.run(startedAt, input.requestSummary, input.stoppedReason, input.iterations, input.requirementsSummary ?? null);
+    return { id: Number(result.lastInsertRowid), startedAt, ...input };
+  }
+
+  /** Most recent runs first. */
+  recentRuns(limit = 5): RunHistoryEntry[] {
+    const rows = this.db.prepare("SELECT * FROM run_history ORDER BY id DESC LIMIT ?").all(limit);
+    return (rows as any[]).map((r) => ({
+      id: r.id,
+      startedAt: r.startedAt,
+      requestSummary: r.requestSummary,
+      stoppedReason: r.stoppedReason,
+      iterations: r.iterations,
+      requirementsSummary: r.requirementsSummary ?? undefined,
+    }));
+  }
+
+  /** Compact summary for inclusion in the agent's system prompt — oldest-of-the-recent-set first, so it reads chronologically. */
+  summarizeRunHistory(limit = 5): string {
+    const runs = this.recentRuns(limit);
+    if (runs.length === 0) return "(no prior runs recorded for this project)";
+    return runs
+      .reverse()
+      .map((r) => {
+        const when = new Date(r.startedAt).toISOString();
+        const reqs = r.requirementsSummary ? `, requirements: ${r.requirementsSummary}` : "";
+        return `- [${when}] "${r.requestSummary}" -> ${r.stoppedReason} (${r.iterations} iteration(s)${reqs})`;
+      })
       .join("\n");
   }
 
