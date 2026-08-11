@@ -87,9 +87,16 @@ and the live Unity/Ollama session for the demo run itself).
       command that's genuinely killed on its own timeout, and one killed
       immediately on abort rather than running to completion, exercised
       through the real `ToolExecutor` and the real `Agent.run()` loop.
-- [ ] Failure handling — partial: `stoppedReason` distinguishes
-      `timed_out`/`file_limit_reached`/`max_iterations`/normal completion,
-      but there's no structured failure taxonomy beyond that.
+- [x] Failure handling — `stoppedReason` gained `"repeated_failures"`:
+      `Agent.run()` now tracks *consecutive* tool-call errors (reset by any
+      success) and stops once `maxConsecutiveToolFailures` (default 3) is
+      hit, instead of burning the entire iteration budget retrying the same
+      broken tool call one failure at a time — a misconfigured engine
+      bridge or a vendor that's down previously looked identical to
+      `max_iterations` in the result, now it's distinguishable and stops
+      faster. Unit-tested: a run that hits the guard after exactly 3
+      consecutive failures, and one where an occasional failure sits
+      between two successes and correctly does *not* trip it.
 
 ## P1.5 — Model orchestration
 

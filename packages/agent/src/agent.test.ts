@@ -424,4 +424,58 @@ describe("Agent", () => {
     const toolResultMessage = result.messages.find((m) => m.role === "tool");
     expect(JSON.parse((toolResultMessage as { content: string }).content).exitCode).not.toBe(0);
   }, 25_000);
+
+  it("stops with repeated_failures after enough consecutive tool errors, instead of burning the whole iteration budget", async () => {
+    const root = await makeProject();
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+    // Every attempt calls a nonexistent tool, which always errors - this would
+    // otherwise run all the way to max_iterations, one failure at a time.
+    const provider = new ScriptedProvider(
+      Array.from({ length: 10 }, (_, i) => ({
+        message: { role: "assistant" as const, content: "" },
+        toolCalls: [{ id: String(i), name: "nonexistent_tool", arguments: {} }],
+      })),
+    );
+
+    const agent = new Agent({
+      provider,
+      model: "m",
+      systemPrompt: "sys",
+      executor,
+      mode: "build",
+      maxIterations: 10,
+      maxConsecutiveToolFailures: 3,
+    });
+    const result = await agent.run([{ role: "user", content: "do something broken" }]);
+
+    expect(result.stoppedReason).toBe("repeated_failures");
+    expect(result.iterations).toBe(3);
+  });
+
+  it("resets the consecutive-failure count after a successful tool call, so an occasional error doesn't end the run", async () => {
+    const root = await makeProject();
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+    const provider = new ScriptedProvider([
+      { message: { role: "assistant", content: "" }, toolCalls: [{ id: "1", name: "nonexistent_tool", arguments: {} }] },
+      { message: { role: "assistant", content: "" }, toolCalls: [{ id: "2", name: "read_file", arguments: { path: "hello.txt" } }] },
+      { message: { role: "assistant", content: "" }, toolCalls: [{ id: "3", name: "nonexistent_tool", arguments: {} }] },
+      { message: { role: "assistant", content: "" }, toolCalls: [{ id: "4", name: "nonexistent_tool", arguments: {} }] },
+      { message: { role: "assistant", content: "all done" } },
+    ]);
+
+    const agent = new Agent({
+      provider,
+      model: "m",
+      systemPrompt: "sys",
+      executor,
+      mode: "build",
+      maxIterations: 10,
+      maxConsecutiveToolFailures: 3,
+    });
+    const result = await agent.run([{ role: "user", content: "hi" }]);
+
+    // Two failures happened, but a real success (read_file) sat between them and the
+    // trailing pair, so the run should complete normally instead of tripping the guard.
+    expect(result.stoppedReason).toBe("completed");
+  });
 });

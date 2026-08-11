@@ -27,6 +27,14 @@ export interface AgentOptions {
    * run can touch before stopping to check in.
    */
   maxFileModifications?: number;
+  /**
+   * Hard cap on *consecutive* tool-call failures (reset to zero by any
+   * successful tool call) — bounds a run that's stuck calling the same
+   * broken tool over and over (a misconfigured engine bridge, a vendor
+   * that's down) instead of burning the full iteration budget on repeats
+   * of the same failure before giving up. Defaults to 3.
+   */
+  maxConsecutiveToolFailures?: number;
   temperature?: number;
   maxOutputTokens?: number;
   onLogEntry?: (entry: OperationLogEntry) => void;
@@ -48,7 +56,7 @@ export interface AgentRunResult {
   messages: ChatMessage[];
   log: OperationLogEntry[];
   iterations: number;
-  stoppedReason: "completed" | "max_iterations" | "cancelled" | "timed_out" | "file_limit_reached";
+  stoppedReason: "completed" | "max_iterations" | "cancelled" | "timed_out" | "file_limit_reached" | "repeated_failures";
   /**
    * Whatever plan/requirement bookkeeping the model recorded via
    * `set_plan`/`set_requirements`/`update_requirement_status` during this
@@ -62,6 +70,7 @@ export interface AgentRunResult {
 }
 
 const DEFAULT_MAX_ITERATIONS = 10;
+const DEFAULT_MAX_CONSECUTIVE_TOOL_FAILURES = 3;
 const MUTATING_FILE_TOOLS = new Set(["create_file", "edit_file", "delete_file"]);
 
 /**
@@ -74,6 +83,7 @@ const MUTATING_FILE_TOOLS = new Set(["create_file", "edit_file", "delete_file"])
 export class Agent {
   private readonly log: OperationLogEntry[] = [];
   private fileModificationCount = 0;
+  private consecutiveToolFailures = 0;
 
   constructor(private readonly options: AgentOptions) {}
 
@@ -123,6 +133,7 @@ export class Agent {
         return this.buildResult(messages, iteration, "completed");
       }
 
+      const maxConsecutiveToolFailures = this.options.maxConsecutiveToolFailures ?? DEFAULT_MAX_CONSECUTIVE_TOOL_FAILURES;
       for (const call of result.toolCalls) {
         await this.executeAndRecord(call, messages);
         if (this.options.maxFileModifications != null && this.fileModificationCount >= this.options.maxFileModifications) {
@@ -132,6 +143,14 @@ export class Agent {
             summary: `Stopped: reached the limit of ${this.options.maxFileModifications} file modification(s) for this run.`,
           });
           return this.buildResult(messages, iteration, "file_limit_reached");
+        }
+        if (this.consecutiveToolFailures >= maxConsecutiveToolFailures) {
+          this.record({
+            timestamp: Date.now(),
+            kind: "error",
+            summary: `Stopped: ${this.consecutiveToolFailures} consecutive tool call failures — the model appears stuck on a broken tool rather than making progress.`,
+          });
+          return this.buildResult(messages, iteration, "repeated_failures");
         }
       }
     }
@@ -159,6 +178,8 @@ export class Agent {
       summary: toolResult.isError ? `${call.name} failed: ${toolResult.content}` : `${call.name} succeeded`,
       detail: toolResult,
     });
+
+    this.consecutiveToolFailures = toolResult.isError ? this.consecutiveToolFailures + 1 : 0;
 
     if (!toolResult.isError && MUTATING_FILE_TOOLS.has(call.name)) {
       this.fileModificationCount++;
