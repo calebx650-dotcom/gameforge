@@ -6,6 +6,8 @@ export interface GodotWsClientConfig {
   url: string;
   connectTimeoutMs?: number;
   requestTimeoutMs?: number;
+  /** When set, a request in flight rejects immediately on abort instead of waiting out its own timeout. */
+  signal?: AbortSignal;
 }
 
 interface PendingRequest {
@@ -14,6 +16,12 @@ interface PendingRequest {
 }
 
 let requestCounter = 0;
+
+function abortError(): Error {
+  const err = new Error("Aborted");
+  err.name = "AbortError";
+  return err;
+}
 
 /**
  * A minimal request/response client over a raw WebSocket: every call sends
@@ -73,20 +81,39 @@ export class GodotWsClient {
     }
     const id = ++requestCounter;
     const socket = this.socket;
+    const signal = this.config.signal;
 
     return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(abortError());
+        return;
+      }
+
       const timer = setTimeout(() => {
+        cleanup();
         this.pending.delete(id);
         reject(new ProviderError(`Godot bridge command "${command}" timed out after ${this.requestTimeoutMs}ms`));
       }, this.requestTimeoutMs);
 
+      const onAbort = () => {
+        cleanup();
+        this.pending.delete(id);
+        reject(abortError());
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+
+      const cleanup = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+      };
+
       this.pending.set(id, {
         resolve: (value) => {
-          clearTimeout(timer);
+          cleanup();
           resolve(value);
         },
         reject: (err) => {
-          clearTimeout(timer);
+          cleanup();
           reject(err);
         },
       });

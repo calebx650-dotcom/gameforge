@@ -70,6 +70,43 @@ describe("GodotWsClient", () => {
     const client = new GodotWsClient({ url: "ws://127.0.0.1:1", connectTimeoutMs: 500 });
     await expect(client.connect()).rejects.toThrow();
   });
+
+  it("rejects an in-flight command immediately when the configured signal aborts, rather than waiting out its own timeout", async () => {
+    // A raw server that deliberately never replies to any message, so the
+    // only way this call resolves is via the abort signal or the (much
+    // longer) request timeout — proves the abort path actually
+    // short-circuits the wait instead of coincidentally finishing first.
+    const wss = new WebSocketServer({ port: 0 });
+    await new Promise<void>((resolve) => wss.on("listening", () => resolve()));
+    const port = (wss.address() as AddressInfo).port;
+    const url = `ws://127.0.0.1:${port}`;
+
+    try {
+      const controller = new AbortController();
+      const client = new GodotWsClient({ url, requestTimeoutMs: 30_000, signal: controller.signal });
+      await client.connect();
+
+      const pending = client.send("never_replies");
+      controller.abort();
+
+      await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+      client.disconnect();
+    } finally {
+      for (const c of wss.clients) c.terminate();
+      await new Promise<void>((resolve) => wss.close(() => resolve()));
+    }
+  });
+
+  it("rejects immediately if the signal is already aborted before the call is made", async () => {
+    server = await startFakeGodotServer({ ping: () => ({ pong: true }) });
+    const controller = new AbortController();
+    controller.abort();
+    const client = new GodotWsClient({ url: server.url, signal: controller.signal });
+    await client.connect();
+
+    await expect(client.send("ping")).rejects.toMatchObject({ name: "AbortError" });
+    client.disconnect();
+  });
 });
 
 describe("GodotBridge", () => {

@@ -16,6 +16,8 @@ import type {
 export interface UnityBridgeConfig {
   /** Base URL of a locally-running unity-mcp server (started by the Unity Editor package). */
   baseUrl?: string;
+  /** Forwarded to McpHttpClient — see its doc comment for what aborting mid-call does. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -42,7 +44,7 @@ export class UnityBridge implements EngineBridge {
     // 8080 is unity-mcp's real HTTP-transport default (confirmed live 2026-08-09 — see
     // UNITY_BRIDGE.md). 6400 is the legacy stdio-mode bridge's TCP port, not an HTTP
     // JSON-RPC listener; McpHttpClient can't talk to it.
-    this.client = new McpHttpClient({ baseUrl: config.baseUrl ?? "http://127.0.0.1:8080" });
+    this.client = new McpHttpClient({ baseUrl: config.baseUrl ?? "http://127.0.0.1:8080", signal: config.signal });
   }
 
   async connect(): Promise<void> {

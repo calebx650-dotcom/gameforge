@@ -346,4 +346,38 @@ describe("Agent", () => {
     expect(result.stoppedReason).toBe("cancelled");
     expect(result.iterations).toBe(0);
   });
+
+  it("forwards its abort signal all the way into an in-flight tool call, not just the top of the loop", async () => {
+    // A regression test for the actual gap: the per-iteration `signal.aborted`
+    // check alone doesn't help if a *single* tool call itself hangs — the run
+    // only ever cancels between iterations, so an abort during a slow tool
+    // call (a long shell command, a slow engine-bridge call) previously had
+    // to be waited out. This drives a real run_command sleep through the
+    // real ToolExecutor and confirms cancelling mid-call actually kills it
+    // quickly instead of running to completion.
+    const root = await makeProject();
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+    const provider = new ScriptedProvider([
+      {
+        message: { role: "assistant", content: "" },
+        toolCalls: [{ id: "1", name: "run_command", arguments: { command: "sleep 30", timeoutMs: 30_000 } }],
+      },
+      { message: { role: "assistant", content: "should not be reached" } },
+    ]);
+    const controller = new AbortController();
+
+    const agent = new Agent({ provider, model: "m", systemPrompt: "sys", executor, mode: "build", signal: controller.signal });
+    const started = Date.now();
+    setTimeout(() => controller.abort(), 50);
+    const result = await agent.run([{ role: "user", content: "hi" }]);
+    const elapsed = Date.now() - started;
+
+    // Generous margin — this only needs to prove the run didn't wait out the
+    // full 30s sleep/timeout, not that it reacted within some tight bound;
+    // under a fully parallel `npm test` run, CPU contention can delay the
+    // scheduled abort() call itself by a second or more.
+    expect(elapsed).toBeLessThan(20_000);
+    const toolResultMessage = result.messages.find((m) => m.role === "tool");
+    expect(JSON.parse((toolResultMessage as { content: string }).content).exitCode).not.toBe(0);
+  }, 25_000);
 });

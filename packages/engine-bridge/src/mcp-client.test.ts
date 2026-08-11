@@ -232,6 +232,69 @@ describe("McpHttpClient", () => {
     expect(tools).toEqual([]);
   });
 
+  it("aborts an in-flight call immediately via the configured signal, without triggering the stale-session retry", async () => {
+    const controller = new AbortController();
+    let toolCallReached = false;
+    globalThis.fetch = vi.fn(async (_url, init) => {
+      const body = JSON.parse((init as RequestInit).body as string);
+      const signal = (init as RequestInit).signal;
+      if (body.method === "initialize") {
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: {} }), {
+          status: 200,
+          headers: { "Mcp-Session-Id": SESSION_ID, "Content-Type": "application/json" },
+        });
+      }
+      if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
+
+      toolCallReached = true;
+      // Simulate a real fetch honoring an already-aborted (or soon-to-abort)
+      // signal by rejecting with a DOMException named AbortError, the way
+      // undici/browsers actually behave.
+      controller.abort();
+      const err = new Error("This operation was aborted");
+      err.name = "AbortError";
+      throw err;
+    }) as unknown as typeof fetch;
+
+    const client = new McpHttpClient({ baseUrl: "http://127.0.0.1:6400", signal: controller.signal });
+    await expect(client.listTools()).rejects.toMatchObject({ name: "AbortError" });
+    expect(toolCallReached).toBe(true);
+
+    // Exactly one initialize call — the abort must not have triggered the
+    // forget-session-and-retry recovery path meant for real network/session
+    // failures, since this was a deliberate cancellation, not a fault.
+    const initializeCalls = (globalThis.fetch as any).mock.calls.filter(
+      ([, init]: [unknown, RequestInit]) => JSON.parse(init.body as string).method === "initialize",
+    );
+    expect(initializeCalls).toHaveLength(1);
+  });
+
+  it("passes the configured signal through to every fetch call", async () => {
+    const controller = new AbortController();
+    const seenSignals: (AbortSignal | null | undefined)[] = [];
+    globalThis.fetch = vi.fn(async (_url, init) => {
+      const body = JSON.parse((init as RequestInit).body as string);
+      seenSignals.push((init as RequestInit).signal);
+      if (body.method === "initialize") {
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: {} }), {
+          status: 200,
+          headers: { "Mcp-Session-Id": SESSION_ID, "Content-Type": "application/json" },
+        });
+      }
+      if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: { tools: [] } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const client = new McpHttpClient({ baseUrl: "http://127.0.0.1:6400", signal: controller.signal });
+    await client.listTools();
+
+    expect(seenSignals.length).toBeGreaterThan(0);
+    expect(seenSignals.every((s) => s === controller.signal)).toBe(true);
+  });
+
   it("throws when initialize succeeds but omits the Mcp-Session-Id header", async () => {
     globalThis.fetch = vi.fn(async (_url, init) => {
       const body = JSON.parse((init as RequestInit).body as string);

@@ -18,6 +18,15 @@ export interface McpToolCallResult {
 
 export interface McpClientConfig {
   baseUrl: string;
+  /**
+   * When set, every request this client makes (including the `initialize`
+   * handshake) is abortable through it — a cancelled agent run should stop
+   * an in-flight Unity call immediately rather than waiting for it to
+   * finish. An abort is a deliberate cancellation, not a transient network
+   * failure, so it's never treated as a stale-session/dropped-connection
+   * case eligible for the single automatic retry `request()` otherwise does.
+   */
+  signal?: AbortSignal;
 }
 
 let requestCounter = 0;
@@ -44,11 +53,13 @@ type JsonRpcEnvelope<T> = { result?: T; error?: { message: string; code?: number
  */
 export class McpHttpClient {
   private readonly mcpUrl: string;
+  private readonly signal: AbortSignal | undefined;
   private sessionId: string | undefined;
   private sessionPromise: Promise<void> | undefined;
 
   constructor(config: McpClientConfig) {
     this.mcpUrl = `${config.baseUrl.replace(/\/$/, "")}/mcp`;
+    this.signal = config.signal;
   }
 
   async listTools(): Promise<McpToolInfo[]> {
@@ -105,8 +116,9 @@ export class McpHttpClient {
     if (this.sessionId) headers["Mcp-Session-Id"] = this.sessionId;
 
     try {
-      return await fetch(this.mcpUrl, { method: "POST", headers, body: JSON.stringify(body) });
+      return await fetch(this.mcpUrl, { method: "POST", headers, body: JSON.stringify(body), signal: this.signal });
     } catch (err) {
+      if ((err as { name?: string }).name === "AbortError") throw err;
       throw new ProviderError(`Failed to reach MCP server at ${this.mcpUrl}: ${(err as Error).message}`, true, err);
     }
   }
@@ -130,6 +142,7 @@ export class McpHttpClient {
     try {
       res = await this.post({ jsonrpc: "2.0", id, method, params });
     } catch (err) {
+      if ((err as { name?: string }).name === "AbortError") throw err;
       if (retryAllowed) {
         this.forgetSession();
         return this.request<T>(method, params, false);

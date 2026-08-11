@@ -218,7 +218,7 @@ export function handleChatConnection(socket: WebSocket, projects: ProjectManager
 
     let engineBridge;
     try {
-      engineBridge = request.engineSettings ? createEngineBridge(request.engineSettings) : undefined;
+      engineBridge = request.engineSettings ? createEngineBridge(request.engineSettings, activeAbortController.signal) : undefined;
     } catch (err) {
       send(socket, { type: "log", entry: { timestamp: Date.now(), kind: "error", summary: `Engine bridge not configured: ${(err as Error).message}` } });
     }

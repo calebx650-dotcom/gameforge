@@ -82,6 +82,48 @@ describe("ToolExecutor", () => {
     expect(JSON.parse(result.content).stdout.trim()).toBe("hi");
   });
 
+  it("actually terminates a sleeping command when its own timeout fires, not just when it happens to exit on its own", async () => {
+    const root = await makeProject();
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+
+    const started = Date.now();
+    const result = await executor.execute(
+      { id: "1", name: "run_command", arguments: { command: "sleep 30", timeoutMs: 200 } },
+      "build",
+    );
+    const elapsed = Date.now() - started;
+
+    // Generous margin — proving it didn't wait out the full 30s sleep, not
+    // enforcing tight timing; a fully parallel `npm test` run can add real
+    // scheduling delay.
+    expect(elapsed).toBeLessThan(20_000);
+    expect(JSON.parse(result.content).timedOut).toBe(true);
+  }, 25_000);
+
+  it("kills an in-flight run_command immediately when the passed signal aborts, instead of waiting out its own timeout", async () => {
+    const root = await makeProject();
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+    const controller = new AbortController();
+
+    const started = Date.now();
+    const pending = executor.execute(
+      { id: "1", name: "run_command", arguments: { command: "sleep 30", timeoutMs: 30_000 } },
+      "build",
+      controller.signal,
+    );
+    setTimeout(() => controller.abort(), 50);
+    const result = await pending;
+    const elapsed = Date.now() - started;
+
+    // The command's own timeout is 30s; a real fix should return well
+    // short of that. Generous margin for CPU contention under a fully
+    // parallel `npm test` run — this proves it didn't wait out the full
+    // sleep/timeout, not tight timing.
+    expect(elapsed).toBeLessThan(20_000);
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(result.content).exitCode).not.toBe(0);
+  }, 25_000);
+
   it("requires approval for a dangerous command even in autonomous mode", async () => {
     const root = await makeProject();
     let approvalCalled = false;

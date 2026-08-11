@@ -14,6 +14,8 @@ import type {
 export interface GodotBridgeConfig {
   /** WebSocket URL of a locally-running Godot EditorPlugin bridge. */
   url?: string;
+  /** Forwarded to GodotWsClient — see its doc comment for what aborting mid-request does. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -38,7 +40,7 @@ export class GodotBridge implements EngineBridge {
   private readonly client: GodotWsClient;
 
   constructor(config: GodotBridgeConfig = {}) {
-    this.client = new GodotWsClient({ url: config.url ?? "ws://127.0.0.1:6401" });
+    this.client = new GodotWsClient({ url: config.url ?? "ws://127.0.0.1:6401", signal: config.signal });
   }
 
   async connect(): Promise<void> {

@@ -27,24 +27,57 @@ export async function runCommandTool(
   guard: WorkspaceGuard,
   command: string,
   timeoutMs = DEFAULT_TIMEOUT_MS,
+  signal?: AbortSignal,
 ): Promise<RunCommandResult> {
   const effectiveTimeout = Math.min(timeoutMs, MAX_TIMEOUT_MS);
 
   return new Promise((resolvePromise) => {
+    // `detached: true` puts the child in its own process group so it can be
+    // killed as a group below. Without this, a shell that *forks* a
+    // grandchild rather than exec-replacing itself (which real shells don't
+    // always do, even for what looks like a single simple command) leaves
+    // that grandchild alive after `child.kill()` — it keeps holding the
+    // inherited stdout/stderr pipe open, so the `close` event this promise
+    // waits on never fires and the call hangs past its own timeout. Found by
+    // writing a real "does abort actually kill a sleeping command" test and
+    // watching it hang, not by inspection.
     const child = spawn(command, {
       shell: true,
       cwd: guard.root,
       env: sanitizedEnv(),
+      detached: process.platform !== "win32",
     });
 
     let stdout = "";
     let stderr = "";
     let timedOut = false;
 
+    // Windows has no POSIX process groups; `-pid` there just fails, so fall
+    // back to killing the immediate child only (this codebase's real testing
+    // is Linux-only — see ROADMAP.md/PROVIDERS.md for that caveat generally).
+    const killTree = () => {
+      if (process.platform !== "win32" && child.pid) {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+          return;
+        } catch {
+          // Group may already be gone, or this platform doesn't support it — fall through.
+        }
+      }
+      child.kill("SIGKILL");
+    };
+
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGKILL");
+      killTree();
     }, effectiveTimeout);
+
+    // A cancelled agent run shouldn't leave a shell command running in the
+    // background until its own (up to 120s) timeout finally kills it —
+    // abort should stop it immediately, the same way it stops everything
+    // else in that run.
+    const onAbort = () => killTree();
+    signal?.addEventListener("abort", onAbort, { once: true });
 
     child.stdout?.on("data", (chunk) => {
       stdout += chunk.toString();
@@ -55,6 +88,7 @@ export async function runCommandTool(
 
     child.on("close", (code) => {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       resolvePromise({ stdout: stdout.slice(0, 50_000), stderr: stderr.slice(0, 50_000), exitCode: code, timedOut });
     });
   });

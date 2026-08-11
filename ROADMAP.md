@@ -46,7 +46,7 @@ and the live Unity/Ollama session for the demo run itself).
 
 ## P1 — Reliability
 
-**Status: Partial.**
+**Status: Done.**
 
 - [x] Checkpoints — `maybeCreateCheckpoint()` auto-commits a dirty working
       tree before every build/autonomous run.
@@ -63,11 +63,30 @@ and the live Unity/Ollama session for the demo run itself).
       genuinely broken server still fails loudly. Unit-tested (3 new cases
       in `mcp-client.test.ts`); not yet exercised against a real Unity
       Editor's session actually expiring. See UNITY_BRIDGE.md.
-- [ ] Task cancellation — **partial, unverified.** `Agent.run()` accepts an
-      `AbortSignal` and `apps/server` wires one up per chat connection, but
-      it hasn't been confirmed that aborting mid-tool-call (especially an
-      in-flight engine-bridge HTTP request) stops cleanly rather than
-      leaving orphaned state.
+- [x] Task cancellation — the gap was real: `Agent.run()` only checked its
+      `AbortSignal` between iterations, so cancelling mid-tool-call (a slow
+      `run_command`, an in-flight engine-bridge HTTP request) previously had
+      to be waited out. The signal now threads all the way into the tool
+      layer: `ToolExecutor.execute()` takes it and forwards it to
+      `run_command` (kills the process immediately instead of waiting for
+      its own up-to-120s timeout) and to `McpHttpClient`/`GodotWsClient`
+      (aborts the in-flight HTTP/WebSocket call immediately, without
+      triggering the MCP-recovery retry above — a deliberate cancellation
+      isn't a fault to recover from). Finding this out required actually
+      writing a "does abort really kill a sleeping command" test, which
+      surfaced a second, independent real bug: killing a `shell: true`
+      child alone doesn't reliably terminate it, because a shell that
+      *forks* rather than exec-replaces itself for a command leaves the
+      real process running and holding the output pipe open, so `close`
+      never fires — fixed by spawning detached and killing the whole
+      process group (`process.kill(-pid, "SIGKILL")` on POSIX; Windows
+      falls back to killing just the immediate child, untested there).
+      That fix also applies to the pre-existing timeout path, not just the
+      new cancellation path — a genuine `run_command` bug this work
+      happened to uncover. Real regression tests for both: a sleeping
+      command that's genuinely killed on its own timeout, and one killed
+      immediately on abort rather than running to completion, exercised
+      through the real `ToolExecutor` and the real `Agent.run()` loop.
 - [ ] Failure handling — partial: `stoppedReason` distinguishes
       `timed_out`/`file_limit_reached`/`max_iterations`/normal completion,
       but there's no structured failure taxonomy beyond that.
@@ -163,8 +182,7 @@ and a local-first option behind the same interface:
 - [x] Security — `WorkspaceGuard` project-root sandboxing, mode-gated
       permissions, `costsMoney` gating on every vendor call. See
       SECURITY.md.
-- [ ] Reliability — see P1 above; the remaining open item there
-      (task cancellation, unverified) blocks calling this done.
+- [x] Reliability — see P1 above, now Done.
 - [ ] Performance — not profiled or budgeted anywhere yet.
 - [ ] Logging — the operation log is in-memory per agent run only, not
       persisted to disk.

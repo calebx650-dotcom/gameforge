@@ -131,7 +131,7 @@ export class Agent {
 
   private async executeAndRecord(call: ToolCall, messages: ChatMessage[]): Promise<void> {
     this.record({ timestamp: Date.now(), kind: "tool_call", summary: `${call.name}(${summarizeArgs(call)})`, detail: call });
-    const toolResult = await this.options.executor.execute(call, this.options.mode);
+    const toolResult = await this.options.executor.execute(call, this.options.mode, this.options.signal);
     messages.push(toolResult);
     this.record({
       timestamp: Date.now(),

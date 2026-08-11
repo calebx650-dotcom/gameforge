@@ -45,7 +45,7 @@ export class ToolExecutor {
     return getAvailableTools(this.generationProviders, this.engineBridge);
   }
 
-  async execute(call: ToolCall, mode: AgentMode): Promise<ToolResultMessage> {
+  async execute(call: ToolCall, mode: AgentMode, signal?: AbortSignal): Promise<ToolResultMessage> {
     const definition = findToolDefinition(call.name);
     if (!definition) {
       return this.errorResult(call, `Unknown tool: ${call.name}`);
@@ -76,14 +76,14 @@ export class ToolExecutor {
     }
 
     try {
-      const content = await this.dispatch(call);
+      const content = await this.dispatch(call, signal);
       return { role: "tool", toolCallId: call.id, name: call.name, content };
     } catch (err) {
       return this.errorResult(call, (err as Error).message);
     }
   }
 
-  private async dispatch(call: ToolCall): Promise<string> {
+  private async dispatch(call: ToolCall, signal?: AbortSignal): Promise<string> {
     const args = call.arguments;
     switch (call.name) {
       case "read_file":
@@ -109,7 +109,7 @@ export class ToolExecutor {
         await createDirectoryTool(this.guard, String(args.path));
         return `Created directory ${args.path}`;
       case "run_command": {
-        const result = await runCommandTool(this.guard, String(args.command), args.timeoutMs as number | undefined);
+        const result = await runCommandTool(this.guard, String(args.command), args.timeoutMs as number | undefined, signal);
         return JSON.stringify(result);
       }
       case "git_status":
