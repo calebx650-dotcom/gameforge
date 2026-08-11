@@ -119,6 +119,8 @@ export class ChatSocket {
     message: string;
     engineSettings?: { engine: string; url?: string };
     stream?: boolean;
+    /** Reference images attached to this message — see ChatRequest.images on the server. */
+    images?: Array<{ data: string; mimeType: string }>;
   }): void {
     this.socket.send(JSON.stringify({ type: "chat", ...input }));
   }

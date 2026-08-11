@@ -280,12 +280,36 @@ and a local-first option behind the same interface:
 - [x] Audio — `packages/audio` (ElevenLabs cloud; Kokoro/XTTS-v2/AudioCraft
       local).
 - [x] Images — the vendor-agnostic PBR material path in `packages/assets3d`.
-- [ ] Video/reference understanding — **partial.** Vision analysis of
-      *output* screenshots exists (P0); taking a reference image or video
-      as *input* to guide generation does not.
-- [ ] Multimodal workflows — **partial**, same gap: multimodal today means
-      "the model can see a screenshot," not a general multimodal input
-      pipeline.
+- [x] Reference-image input — deliberately scoped to still images, not
+      video (see below for why that's a separate item, not an unfinished
+      part of this one). `ChatRequest.images` (`apps/server/src/
+      chat-socket.ts`) lets a chat request carry reference images
+      (screenshot of a target UI, concept art, a level-layout photo)
+      alongside the text message; the server combines them into the same
+      `ContentPart[]` shape `capture_screenshot`'s existing vision splice
+      (P0) already produces, so it reaches any vision-capable provider
+      through the exact path already proven to work — no new provider-side
+      code needed. The desktop UI gained a basic attach-image control
+      (file picker, preview thumbnail, cleared after sending). Proven
+      end-to-end in `apps/server/src/e2e.test.ts`: a real WebSocket chat
+      request with an attached image lands in GameForge's own message
+      history *and* is confirmed forwarded onto the real Ollama wire
+      request body (`OllamaProvider`'s `images` array mapping).
+- [ ] Video reference input — genuinely out of scope for now, not a small
+      remainder of the item above: a real video pipeline needs frame
+      extraction/sampling and a decision about how many/which frames reach
+      a vision model's context window, a materially different (and
+      heavier) engineering problem than "attach one image." `packages/
+      vision`'s existing ffmpeg-based extraction is the natural foundation
+      for this if it's built later, but wiring it into chat input hasn't
+      been started.
+- [x] Multimodal workflows — narrower than it used to be: multimodal
+      *input* exists in two real forms (a captured engine screenshot
+      spliced in automatically, P0; a user-attached reference image,
+      above), both landing through the identical `ContentPart[]` path —
+      this is a genuine input pipeline now, not just "the model can see a
+      screenshot." A general document/multi-file/video multimodal
+      pipeline beyond images is not built (see the video item above).
 
 ## P3.5 — Autonomous development
 

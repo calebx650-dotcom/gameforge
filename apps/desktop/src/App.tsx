@@ -80,6 +80,7 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [gitRefreshSignal, setGitRefreshSignal] = useState(0);
   const [streamingText, setStreamingText] = useState("");
+  const [attachedImage, setAttachedImage] = useState<{ data: string; mimeType: string; previewUrl: string } | null>(null);
 
   const [engine, setEngine] = useState<string>("none");
   const [engineUrl, setEngineUrl] = useState("");
@@ -124,13 +125,25 @@ export function App() {
     }
   }
 
+  function handleAttachImage(file: File | undefined) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const commaIndex = dataUrl.indexOf(",");
+      setAttachedImage({ data: dataUrl.slice(commaIndex + 1), mimeType: file.type || "image/png", previewUrl: dataUrl });
+    };
+    reader.readAsDataURL(file);
+  }
+
   function handleSend() {
     if (!project || !model || !prompt.trim() || busy) return;
     setBusy(true);
-    setChat((prev) => [...prev, { role: "user", text: prompt }]);
+    setChat((prev) => [...prev, { role: "user", text: attachedImage ? `${prompt} [+ 1 reference image]` : prompt }]);
     setLog([]);
     setStreamingText("");
     setLastResult(null);
+    const imagesForThisMessage = attachedImage ? [{ data: attachedImage.data, mimeType: attachedImage.mimeType }] : undefined;
 
     const socket = new ChatSocket({
       onOpen: () => {
@@ -141,6 +154,7 @@ export function App() {
           message: prompt,
           engineSettings: engine !== "none" ? { engine, url: engineUrl || undefined } : undefined,
           stream: true,
+          images: imagesForThisMessage,
         });
       },
       onLog: (entry) => setLog((prev) => [...prev, entry]),
@@ -167,6 +181,7 @@ export function App() {
     });
     socketRef.current = socket;
     setPrompt("");
+    setAttachedImage(null);
   }
 
   function respondApproval(approved: boolean) {
@@ -315,6 +330,14 @@ export function App() {
               </div>
             )}
 
+            {attachedImage && (
+              <div className="attached-image-preview" data-testid="attached-image-preview">
+                <img src={attachedImage.previewUrl} alt="Attached reference" />
+                <button onClick={() => setAttachedImage(null)} disabled={busy}>
+                  Remove
+                </button>
+              </div>
+            )}
             <div className="chat-input">
               <textarea
                 placeholder="Describe what you want GameForge to build or change…"
@@ -322,6 +345,16 @@ export function App() {
                 onChange={(e) => setPrompt(e.target.value)}
                 disabled={busy}
               />
+              <label className="attach-image-button">
+                Attach
+                <input
+                  type="file"
+                  accept="image/*"
+                  disabled={busy}
+                  onChange={(e) => handleAttachImage(e.target.files?.[0])}
+                  style={{ display: "none" }}
+                />
+              </label>
               <button onClick={handleSend} disabled={busy || !project || !model}>
                 {busy ? "Working…" : "Send"}
               </button>

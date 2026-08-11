@@ -609,4 +609,83 @@ describe("GameForge end-to-end smoke test", () => {
       await new Promise((resolve) => fakeBackupOllama.close(resolve));
     }
   });
+
+  it("forwards a reference image attached to the chat request through to the real provider call (P3 reference-image input)", async () => {
+    const httpBase = `http://localhost:${gfPort}`;
+    let capturedOllamaBody: any;
+
+    const fakeVisionOllama = createHttpServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        if (req.url === "/api/tags") {
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ models: [{ name: "llama3.1:8b" }] }));
+          return;
+        }
+        if (req.url === "/api/chat") {
+          capturedOllamaBody = JSON.parse(body);
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ message: { content: "I see a red square." }, prompt_eval_count: 1, eval_count: 1 }));
+          return;
+        }
+        res.statusCode = 404;
+        res.end();
+      });
+    });
+    await new Promise<void>((resolve) => fakeVisionOllama.listen(0, resolve));
+    const fakeVisionOllamaPort = (fakeVisionOllama.address() as AddressInfo).port;
+
+    try {
+      const imageProjectRoot = await mkdtemp(join(tmpdir(), "gf-e2e-refimage-"));
+      const openRes = await request(httpBase).post("/api/projects").send({ path: imageProjectRoot });
+      const projectId = openRes.body.id;
+
+      const result = await new Promise<{ finalText: string; sawImageInLocalMessages: boolean }>((resolve, reject) => {
+        const ws = new WebSocket(`ws://localhost:${gfPort}/ws/chat`);
+        const timeout = setTimeout(() => reject(new Error("reference-image e2e timed out")), 10_000);
+
+        ws.on("open", () => {
+          ws.send(
+            JSON.stringify({
+              type: "chat",
+              projectId,
+              mode: "ask",
+              providerSettings: { provider: "ollama", model: "llama3.1:8b", baseUrl: `http://127.0.0.1:${fakeVisionOllamaPort}` },
+              message: "What shape is in this reference image?",
+              images: [{ data: "redSquareBase64", mimeType: "image/png" }],
+            }),
+          );
+        });
+
+        ws.on("message", (raw) => {
+          const msg = JSON.parse(raw.toString());
+          if (msg.type === "result") {
+            clearTimeout(timeout);
+            const finalMessage = msg.messages[msg.messages.length - 1];
+            // messages[0] is the system prompt, messages[1] is the first real user turn.
+            const firstUserMessage = msg.messages[1];
+            const sawImageInLocalMessages =
+              Array.isArray(firstUserMessage?.content) &&
+              firstUserMessage.content.some((part: { type: string; data?: string }) => part.type === "image" && part.data === "redSquareBase64");
+            ws.close();
+            resolve({ finalText: finalMessage.content, sawImageInLocalMessages });
+          } else if (msg.type === "error") {
+            clearTimeout(timeout);
+            reject(new Error(msg.message));
+          }
+        });
+      });
+
+      // Confirms the attached image reached GameForge's own message history...
+      expect(result.sawImageInLocalMessages).toBe(true);
+      expect(result.finalText).toBe("I see a red square.");
+      // ...and that it was genuinely forwarded to the real Ollama wire request, not
+      // just kept in local state — OllamaProvider maps ImagePart onto Ollama's
+      // message-level `images` array (see PROVIDERS.md's Ollama vision section).
+      expect(capturedOllamaBody.messages[1].images).toEqual(["redSquareBase64"]);
+    } finally {
+      await new Promise((resolve) => fakeVisionOllama.close(resolve));
+    }
+  });
 });

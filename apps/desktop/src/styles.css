@@ -205,6 +205,32 @@ button:disabled {
   min-height: 60px;
   resize: vertical;
 }
+.attach-image-button {
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.attach-image-button:hover {
+  color: var(--text);
+}
+.attached-image-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px 0;
+}
+.attached-image-preview img {
+  max-height: 64px;
+  max-width: 96px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  object-fit: cover;
+}
 
 .activity-panel {
   padding: 12px;

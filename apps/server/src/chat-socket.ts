@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
-import type { AgentMode, ChatMessage, ProviderSettings, ToolCall } from "@gameforge/shared";
+import type { AgentMode, ChatMessage, ContentPart, ProviderSettings, ToolCall } from "@gameforge/shared";
 import { createProvider, ModelRouter, type RouterCandidate } from "@gameforge/llm";
 import { Agent } from "@gameforge/agent";
 import { ToolExecutor, maybeCreateCheckpoint, type GenerationProviders } from "@gameforge/tools";
@@ -56,6 +56,19 @@ interface ChatRequest {
    */
   fallbackProviderSettings?: ProviderSettings[];
   message: string;
+  /**
+   * Reference images the user is attaching to this message — a screenshot
+   * of a UI they want matched, a photo of a level layout, concept art for
+   * an asset. Base64 data, no `data:` prefix, alongside its real MIME type.
+   * Combined with `message` into the same `ContentPart[]` shape
+   * `capture_screenshot`'s vision splice already produces (P0), so this
+   * reaches any vision-capable provider through the exact same path — no
+   * new provider-side code needed. A provider that doesn't support vision
+   * still gets the text; the image is simply invisible to it, the same as
+   * any other multimodal content it can't use. Omit for a plain text-only
+   * message (the existing behavior, unchanged).
+   */
+  images?: Array<{ data: string; mimeType: string }>;
   systemPromptExtra?: string;
   generationSettings?: GenerationSettings;
   engineSettings?: EngineBridgeSettings;
@@ -80,6 +93,18 @@ interface ChatRequest {
 }
 
 const DEFAULT_ENGINE_MAX_ITERATIONS = 25;
+
+/**
+ * Plain text (the existing, unchanged shape) when there are no attached
+ * images; a `ContentPart[]` array — text first, then each image — when
+ * there are. Keeping the plain-string path for the common no-image case
+ * means every existing fake test server/client that only ever sent a
+ * string keeps working untouched.
+ */
+function buildInitialUserContent(message: string, images: Array<{ data: string; mimeType: string }> | undefined): string | ContentPart[] {
+  if (!images?.length) return message;
+  return [{ type: "text", text: message }, ...images.map((img): ContentPart => ({ type: "image", data: img.data, mimeType: img.mimeType }))];
+}
 
 /**
  * Builds live provider instances for whichever generation vendors the
@@ -332,7 +357,7 @@ export function handleChatConnection(socket: WebSocket, projects: ProjectManager
       ...autonomousLimits,
     });
 
-    const conversation: ChatMessage[] = [{ role: "user", content: request.message }];
+    const conversation: ChatMessage[] = [{ role: "user", content: buildInitialUserContent(request.message, request.images) }];
 
     try {
       const result = await agent.run(conversation);
