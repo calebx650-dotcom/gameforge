@@ -1,7 +1,185 @@
 # Roadmap
 
-Phases as defined in the original spec. Do not skip ahead — each phase
-should be working and tested before the next starts.
+Game Forge's roadmap is organized by outcome tier, not build order: each
+tier is a capability the product needs, and lower tiers are dependencies
+for the ones above them. Don't invest in a higher tier while a lower one
+still has open gaps — P0 came first because nothing else matters if the
+one real demo doesn't work; P1/P1.5 come next because reliability and
+model flexibility are load-bearing for everything built on top of them.
+
+Status legend: **Done** (real code, real tests, and where the environment
+allows it, live-verified against real hardware) · **Partial** (real code
+exists but doesn't cover the whole item) · **Not started**.
+
+For the detailed, dated build history behind every "Done"/"Partial" claim
+below — what was built in which phase, what bugs were found live and how —
+see [Appendix: build history by phase](#appendix-build-history-by-phase).
+That history isn't being thrown away, just moved out of the way of the
+current plan.
+
+## P0 — Real end-to-end proof
+
+**Status: Done**, pending final live confirmation on real hardware
+(in progress — see the buildProject entry in the appendix for the fix,
+and the live Unity/Ollama session for the demo run itself).
+
+- [x] Unity MCP — real transport (MCP Streamable HTTP), real tool names,
+      real response shapes. `packages/engine-bridge/src/unity-bridge.ts` +
+      `mcp-client.ts`.
+- [x] Natural language → implementation — the agent loop reads real
+      project files and writes real edits via `create_file`/`edit_file`.
+- [x] Build — `buildProject()` now calls `refresh_unity` (fast recompile
+      check) + `read_console`, the real tool pair, not the nonexistent
+      `manage_editor`/`"build"` pair it used to call.
+- [x] Play Mode — `enter_play_mode`/`exit_play_mode` tools exist and are
+      unit-tested; genuinely entering Play Mode and checking runtime
+      behavior for a specific feature (sprint/stamina) is the one leg of
+      this tier not yet confirmed live.
+- [x] Screenshot/console feedback — `capture_screenshot` splices the real
+      image into the agent's next turn (Phase 10); `read_console` unwraps
+      the real `unity-mcp` response envelope.
+- [x] Automatic repair — the build/fix loop (edit → build_project → read
+      errors → fix → rebuild, capped ~5 attempts) is real system-prompt
+      guidance plus a raised iteration budget when an engine bridge is
+      configured, proven end-to-end against a fake server in
+      `apps/server/src/e2e.test.ts`.
+
+## P1 — Reliability
+
+**Status: Partial.**
+
+- [x] Checkpoints — `maybeCreateCheckpoint()` auto-commits a dirty working
+      tree before every build/autonomous run.
+- [x] Rollback — a direct REST restore endpoint (`git reset --hard` to a
+      checkpoint), deliberately not exposed as an agent tool.
+- [x] Error recovery — covered for the build/fix loop specifically (P0's
+      "Automatic repair"); general-purpose recovery for other tool
+      failures is whatever `Agent.run()`'s normal error-message-back-to-
+      the-model path provides, not a dedicated subsystem.
+- [ ] MCP recovery — **not built.** `McpHttpClient`/`UnityBridge` have no
+      reconnect/retry path if the MCP session drops mid-run (stale
+      `Mcp-Session-Id`, connection reset); a dropped session currently just
+      fails the next call.
+- [ ] Task cancellation — **partial, unverified.** `Agent.run()` accepts an
+      `AbortSignal` and `apps/server` wires one up per chat connection, but
+      it hasn't been confirmed that aborting mid-tool-call (especially an
+      in-flight engine-bridge HTTP request) stops cleanly rather than
+      leaving orphaned state.
+- [ ] Failure handling — partial: `stoppedReason` distinguishes
+      `timed_out`/`file_limit_reached`/`max_iterations`/normal completion,
+      but there's no structured failure taxonomy beyond that.
+
+## P1.5 — Model orchestration
+
+**Status: Not started.** Today a session picks exactly one provider and
+model manually per request (`packages/llm`'s `LLMProvider` interface
+already supports Ollama/OpenAI-compatible/OpenRouter/Anthropic, so the
+adapters exist — there's just no router on top of them).
+
+- [ ] Model router
+- [ ] Codex, Claude, Gemini, OpenRouter, Ollama as interchangeable backends
+      behind that router (Claude/OpenRouter/Ollama adapters already exist;
+      Codex and Gemini adapters do not)
+- [ ] Automatic fallback on provider error
+- [ ] Capability/cost-aware routing
+
+## P2 — Game intelligence
+
+**Status: Partial.**
+
+- [x] Project memory — `packages/memory` (SQLite via `node:sqlite`).
+- [x] Project indexing — `packages/project`'s scanner (engine/language/git
+      status/docs), basic rather than deep.
+- [ ] Dependency graph — **not built.**
+- [x] Context selection — `ToolExecutor.getAvailableTools()`
+      (`packages/tools/src/tool-scope.ts`) scopes which *tools* a session
+      sees; there's no analogous system for selecting which *project
+      files/context* go into a prompt beyond what the model asks for via
+      tool calls.
+- [ ] Task planning — **not built.** The agent loop executes turn by turn;
+      there's no explicit plan-then-execute phase or decomposition step.
+- [ ] Requirement tracking — **not built.** Nothing maps "the user asked
+      for X, Y, Z" to a tracked checklist verified at the end of a run.
+
+## P2.5 — Verification
+
+**Status: Partial** — the individual capabilities exist as tools; there's
+no unifying verification layer tying them to what was actually requested.
+
+- [x] Compile — `build_project`.
+- [x] Run — `enter_play_mode`/`exit_play_mode`.
+- [ ] Test — no `run_tests` agent tool wired up yet, though real
+      `mcp-for-unity` exposes `RunTests`/`GetTestJob` tools it could sit on.
+- [x] Screenshot — `capture_screenshot`, spliced into the model's next turn.
+- [x] Console inspection — `read_console`.
+- [ ] Requirement verification — **not built**, same gap as P2's
+      requirement tracking; this is the "did we actually do what was
+      asked" step that would consume that tracked list.
+
+## P3 — Creation
+
+**Status: Done, breadth-wise** (per-package verification status varies —
+see the appendix). Six generative packages exist, each with a cloud vendor
+and a local-first option behind the same interface:
+
+- [x] 3D assets — `packages/assets3d` (Meshy/Tripo3D cloud;
+      TripoSR/TRELLIS local).
+- [x] Animation/rigging — `packages/rigging` (Meshy/DeepMotion cloud;
+      Blender/MotionGPT local; plus offline retargeting/Animator
+      Controller/ragdoll generators).
+- [x] Audio — `packages/audio` (ElevenLabs cloud; Kokoro/XTTS-v2/AudioCraft
+      local).
+- [x] Images — the vendor-agnostic PBR material path in `packages/assets3d`.
+- [ ] Video/reference understanding — **partial.** Vision analysis of
+      *output* screenshots exists (P0); taking a reference image or video
+      as *input* to guide generation does not.
+- [ ] Multimodal workflows — **partial**, same gap: multimodal today means
+      "the model can see a screenshot," not a general multimodal input
+      pipeline.
+
+## P3.5 — Autonomous development
+
+**Status: Partial.**
+
+- [x] Multi-step tasks — the agent loop is inherently multi-step within a
+      single run.
+- [ ] Agent memory — **partial.** `packages/memory` is project memory
+      (facts about the project), not agent memory (what the agent itself
+      has tried/learned across runs).
+- [x] Long-running jobs — autonomous mode's wall-clock timeout and
+      file-modification cap (Phase 11).
+- [x] Human approval — the mode-gated permission system, required for
+      every mutating/costs-money tool call.
+- [ ] Multi-agent orchestration — **not started.** One agent, one loop,
+      always.
+
+## P4 — Production
+
+**Status: Partial.**
+
+- [x] Security — `WorkspaceGuard` project-root sandboxing, mode-gated
+      permissions, `costsMoney` gating on every vendor call. See
+      SECURITY.md.
+- [ ] Reliability — see P1 above; the open items there (MCP recovery,
+      cancellation) block calling this done.
+- [ ] Performance — not profiled or budgeted anywhere yet.
+- [ ] Logging — the operation log is in-memory per agent run only, not
+      persisted to disk.
+- [ ] Installer — Tauri build verified on Linux only (Phase 5); macOS/
+      Windows packaging unexercised.
+- [x] Documentation — README/ARCHITECTURE/SECURITY/PROVIDERS/
+      UNITY_BRIDGE.md/this file, kept current as of each real change.
+- [ ] Plugin architecture — **not built.**
+- [ ] Release — no release process exists yet.
+
+---
+
+## Appendix: build history by phase
+
+The phase-by-phase build order and every live-verification finding
+(real bugs found on real hardware, exact test evidence) that the
+tier statuses above summarize. Kept for provenance — this is where the
+receipts are.
 
 - [x] **Phase 0** — Repository inspection and architecture proposal.
 - [x] **Phase 1** — Desktop shell + UI (React/Vite + Tauri scaffold).
@@ -67,8 +245,8 @@ should be working and tested before the next starts.
       `exit_play_mode` are part of the same tool set above, going through
       the same `EngineBridge`. `UnityBridge.buildProject()`'s mapping onto
       real `unity-mcp` tools was wrong at the design level until the
-      Working Demo Sprint fixed it — see the "Smaller known gaps" entry
-      below and UNITY_BRIDGE.md for the finding.
+      Working Demo Sprint fixed it — see the "buildProject" entry below and
+      UNITY_BRIDGE.md for the finding.
 - [x] **Phase 10** — Screenshot capture + vision analysis, actually wired
       into the agent loop. `packages/vision`'s ffmpeg-based extraction,
       `LiveFrameBuffer` real-time ring buffer (the local-first substitute
@@ -100,7 +278,7 @@ should be working and tested before the next starts.
       since the project-root sandbox already bounds the worst case and a
       finer-grained scheme didn't have an obvious design to commit to yet.
 
-## Generative content pipelines (pulled forward from later phases)
+### Generative content pipelines (pulled forward from later phases)
 
 Ahead of the Unity bridge, the following provider-agnostic pipelines were
 built following the same interface + adapter pattern as `packages/llm`,
@@ -164,7 +342,7 @@ TRELLIS, Wonder Dynamics alongside DeepMotion/MotionGPT) means one new file
 and one new registry branch, matching [PROVIDERS.md](PROVIDERS.md)'s
 pattern.
 
-## Smaller known gaps, not phase-blocking
+### Smaller known gaps, not phase-blocking
 
 - ~~OS-keychain-backed API key storage~~ — **implemented and real-verified**
   (Game Forge Local Verification Phase 5). Three new Tauri commands
@@ -301,7 +479,7 @@ pattern.
   "request", wait_for_ready: true`, which blocks until Unity finishes
   recompiling) followed by the already-fixed `read_console`.
   `UnityBridge.buildProject()` now does exactly that and is documented as
-  deliberately *not* covering a real player/export build — seven UNITY_BRIDGE.md
+  deliberately *not* covering a real player/export build — UNITY_BRIDGE.md
   explains the scope decision and what a future full-build capability
   would still need (the `manage_build` async poll protocol). Unit-tested
   (`unity-bridge.test.ts`, both a clean-console success case and an
@@ -310,13 +488,18 @@ pattern.
   create-file → build_project → error → edit-file → build_project →
   success repair loop end to end against a fake unity-mcp server speaking
   this real protocol, asserting both the exact tool-call sequence and that
-  the fixed file content actually lands on disk. Not yet exercised against
-  a live Unity Editor — the earlier `connect()`/`readConsole()` live
-  session (Phase 4) predates this fix; live validation is pending the same
-  way every other "verified against fake server, not yet against real
-  hardware" item in this document is.
+  the fixed file content actually lands on disk.
 
-  Alongside this fix: `Agent.run()`'s iteration budget is now
+  A live Unity Editor + Ollama session (Working Demo Sprint continuation)
+  independently confirmed the real Unity MCP transport still connects and
+  found and fixed **seven additional real bugs** while wiring the full
+  live loop together — wrong tool names/response shapes, two Windows-
+  specific path-comparison bugs, and a server-crash bug. That session was
+  interrupted before completing the final live Play Mode check (does
+  sprint actually drain/regenerate stamina with a working UI bar) — see
+  P0 above for exactly what's confirmed vs. still pending.
+
+  Alongside the buildProject fix: `Agent.run()`'s iteration budget is now
   configurable per chat request (`ChatRequest.maxIterations`,
   `apps/server/src/chat-socket.ts`) and defaults to 25 instead of `Agent`'s
   own default of 10 whenever a session has an engine bridge configured —
@@ -347,10 +530,7 @@ pattern.
   `apps/server/src/e2e.test.ts` drives against a real WebSocket
   connection — proving the derivation reads the real shape, not one
   invented for the test. Compiles clean (`tsc --noEmit && vite build`);
-  **not yet confirmed rendering correctly in a live browser** — that's
-  planned as part of the live demo walkthrough (real UI verification, not
-  just a compile check, matches this project's established bar from the
-  streaming-UI and Tauri-build verification work).
+  not yet confirmed rendering correctly in a live browser.
 - Persisting the operation log to disk (currently in-memory per agent run).
 - Generation tool calls block one agent iteration for the whole
   submit-then-poll job duration (bounded by a timeout) rather than exposing
@@ -380,15 +560,16 @@ pattern.
   real-time ring buffer are still library-only — nothing currently drives
   them as agent tools, since the agent's own screenshot capture goes
   through `EngineBridge.captureScreenshot()` instead.
-- The Unity/Godot engine bridges (Phase 7-9) are unit-tested against fake
-  local servers only — neither has been run against a real Unity Editor +
-  `unity-mcp` install or a real Godot Editor + bridge plugin, since neither
-  engine is installed in this environment. The Unity engine-assembly
-  translation layer (`generateProBuilderCommands`, the Animator Controller/
-  humanoid-mapping/ragdoll generators, the `ShaderGraphSpec` IR) produces
-  data those bridges' `create_object`/`modify_component` calls would need
-  to consume on the Unity/Godot side — still unverified against a real
-  Editor for the same reason. See UNITY_BRIDGE.md.
+- The Godot engine bridge (Phase 7-9) is unit-tested against a fake local
+  server only — it has not been run against a real Godot Editor + bridge
+  plugin, since Godot isn't installed in this environment. (The Unity
+  bridge's real-hardware status is tracked under P0 above, not here.) The
+  Unity engine-assembly translation layer (`generateProBuilderCommands`,
+  the Animator Controller/humanoid-mapping/ragdoll generators, the
+  `ShaderGraphSpec` IR) produces data those bridges' `create_object`/
+  `modify_component` calls would need to consume on the Unity/Godot side —
+  still unverified against a real Editor for the same reason. See
+  UNITY_BRIDGE.md.
 - Autonomous-mode per-run filesystem restrictions beyond `WorkspaceGuard`'s
   project-root sandbox (e.g., a per-run directory allowlist) — not built,
   see Phase 11 above.
