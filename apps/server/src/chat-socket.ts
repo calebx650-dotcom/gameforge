@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
 import type { AgentMode, ChatMessage, ProviderSettings, ToolCall } from "@gameforge/shared";
-import { createProvider } from "@gameforge/llm";
+import { createProvider, ModelRouter, type RouterCandidate } from "@gameforge/llm";
 import { Agent } from "@gameforge/agent";
 import { ToolExecutor, maybeCreateCheckpoint, type GenerationProviders } from "@gameforge/tools";
 import { summarizeProjectContext } from "@gameforge/project";
@@ -44,6 +44,17 @@ interface ChatRequest {
   projectId: string;
   mode: AgentMode;
   providerSettings: ProviderSettings;
+  /**
+   * Optional ordered list of backup providers/models to fall back to if
+   * `providerSettings` (or an earlier fallback) errors out before producing
+   * any output — see `@gameforge/llm`'s `ModelRouter`. Omit for the
+   * existing single-provider behavior (no router involved at all). Each
+   * candidate's cost tier is inferred automatically (`ollama` is treated as
+   * free/local, everything else as a metered paid API), which the router
+   * uses to try free candidates first among whichever ones actually support
+   * this request's requirements.
+   */
+  fallbackProviderSettings?: ProviderSettings[];
   message: string;
   systemPromptExtra?: string;
   generationSettings?: GenerationSettings;
@@ -110,6 +121,32 @@ function buildGenerationProviders(settings: GenerationSettings | undefined): Gen
     /* left unconfigured */
   }
   return providers;
+}
+
+/** `ollama` runs against a local endpoint the user already has, regardless of how many requests they make; every other provider here is a metered cloud API. */
+function inferCostTier(providerId: string): "free" | "paid" {
+  return providerId === "ollama" ? "free" : "paid";
+}
+
+/**
+ * Builds a `ModelRouter` from an ordered candidate list (primary first,
+ * then fallbacks) and surfaces its routing decisions into the same
+ * `log`-message stream `Agent.onLogEntry` already sends, so a fallback is
+ * visible in the Tool Activity panel exactly like any other thing that
+ * happened during the run, not a silent behind-the-scenes swap.
+ */
+function buildRouter(settingsList: ProviderSettings[], socket: WebSocket): ModelRouter {
+  const candidates: RouterCandidate[] = settingsList.map((settings) => ({ settings, costTier: inferCostTier(settings.provider) }));
+  return new ModelRouter({
+    candidates,
+    onRoute: (event) => {
+      const summary =
+        event.attempt === 1
+          ? `Routing to ${event.providerId}/${event.model}.`
+          : `Falling back to ${event.providerId}/${event.model} (attempt ${event.attempt}) after: ${event.fallbackReason ?? "previous candidate failed"}`;
+      send(socket, { type: "log", entry: { timestamp: Date.now(), kind: event.attempt === 1 ? "message" : "error", summary } });
+    },
+  });
 }
 
 interface ApprovalResponse {
@@ -238,7 +275,9 @@ export function handleChatConnection(socket: WebSocket, projects: ProjectManager
 
     let provider;
     try {
-      provider = createProvider(request.providerSettings);
+      provider = request.fallbackProviderSettings?.length
+        ? buildRouter([request.providerSettings, ...request.fallbackProviderSettings], socket)
+        : createProvider(request.providerSettings);
     } catch (err) {
       send(socket, { type: "error", message: (err as Error).message });
       return;

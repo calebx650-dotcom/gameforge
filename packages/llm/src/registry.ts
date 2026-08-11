@@ -3,6 +3,7 @@ import type { LLMProvider } from "./provider.js";
 import { OllamaProvider } from "./providers/ollama.js";
 import { OpenAICompatibleProvider } from "./providers/openai-compatible.js";
 import { AnthropicProvider } from "./providers/anthropic.js";
+import { GeminiProvider } from "./providers/gemini.js";
 
 /**
  * Turns user-chosen provider settings into a live LLMProvider instance.
@@ -37,9 +38,11 @@ export function createProvider(settings: ProviderSettings): LLMProvider {
       });
     case "anthropic":
       return new AnthropicProvider({ apiKey: settings.apiKey, baseUrl: settings.baseUrl });
+    case "gemini":
+      return new GeminiProvider({ apiKey: settings.apiKey, baseUrl: settings.baseUrl });
     default:
       throw new ProviderError(`Unknown provider: ${settings.provider}`);
   }
 }
 
-export const SUPPORTED_PROVIDERS = ["ollama", "openai", "openrouter", "openai-compatible", "anthropic"] as const;
+export const SUPPORTED_PROVIDERS = ["ollama", "openai", "openrouter", "openai-compatible", "anthropic", "gemini"] as const;

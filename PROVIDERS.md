@@ -28,8 +28,9 @@ interface LLMProvider {
 | `ollama`           | Ollama `/api/chat`, `/api/tags` | Local models, no API key. Default base URL `http://127.0.0.1:11434`. |
 | `openai`           | OpenAI chat-completions | Requires an API key. Default base URL `https://api.openai.com/v1`. |
 | `openrouter`       | OpenAI chat-completions | Requires an API key. Default base URL `https://openrouter.ai/api/v1`. Adds `HTTP-Referer`/`X-Title` headers OpenRouter expects. |
-| `openai-compatible`| OpenAI chat-completions | Any self-hosted or third-party server that speaks the same format — just supply `baseUrl` (and `apiKey` if it requires one). This is how Google/Gemini-compatible or other future OpenAI-shaped endpoints plug in without new code. |
+| `openai-compatible`| OpenAI chat-completions | Any self-hosted or third-party server that speaks the same format — just supply `baseUrl` (and `apiKey` if it requires one). OpenAI's Codex models are reached this way too, no separate adapter — they're just another model on the same OpenAI API. |
 | `anthropic`        | Anthropic Messages API  | Requires an API key. |
+| `gemini`           | Google Generative Language API (`generateContent`/`streamGenerateContent`) | Requires an API key (`x-goog-api-key` header). **Not** OpenAI-compatible — distinct request/response shape (`contents`/`parts`, `functionCall`/`functionResponse`, a separate `systemInstruction` field, assistant role called `"model"`) — see `packages/llm/src/providers/gemini.ts`'s module doc comment for the exact mapping. Coded against Google's real documented REST API; **not exercised against a live Google AI Studio account** in this environment — same caveat as the Meshy/Tripo3D/DeepMotion cloud adapters below, not something specific to Gemini. |
 
 `openai`, `openrouter`, and `openai-compatible` are all one class,
 `OpenAICompatibleProvider` (`packages/llm/src/providers/openai-compatible.ts`)
@@ -67,13 +68,58 @@ classes — only the `LLMProvider` interface.
 Nothing in `packages/agent`, `packages/tools`, `apps/server`, or
 `apps/desktop` needs to change.
 
+## Model router (P1.5)
+
+A single chat request can be handed more than one provider/model candidate
+instead of exactly one. `ModelRouter` (`packages/llm/src/router.ts`) is
+itself an `LLMProvider` — `Agent` uses one exactly like any single provider,
+with no idea routing is happening underneath.
+
+```ts
+interface RouterCandidate {
+  settings: ProviderSettings;
+  costTier?: "free" | "paid"; // "free" tried first among eligible candidates
+}
+new ModelRouter({ candidates: RouterCandidate[], onRoute?: (event) => void });
+```
+
+Two things drive which candidate actually serves a request:
+
+- **Capability filtering** — a candidate whose provider doesn't support
+  vision is skipped for a request whose messages include an image; one that
+  doesn't support tool calling is skipped for a request with `tools`. Both
+  checks are static facts (`LLMProvider.supportsVision`/`supportsTools`), no
+  network call needed to decide.
+- **Cost-aware ordering** — among eligible candidates, `"free"`-tier ones
+  (a local/self-hosted endpoint, `ollama` being the obvious case) are tried
+  before `"paid"` ones (a metered cloud API), with the caller's given order
+  as the tiebreaker within a tier.
+
+**Automatic fallback**: if a candidate's call throws, the router tries the
+next eligible one — but only *before* any output has reached the caller. A
+`stream()` failure after the first real chunk propagates instead of
+silently switching backends, since that could duplicate or corrupt output
+already consumed. `onRoute` fires on every attempt (including fallbacks,
+with the reason the previous candidate failed) so a caller can log or
+display which provider actually handled the request.
+
+`apps/server` wires this into the real product, not just the library:
+`ChatRequest.fallbackProviderSettings` is an optional ordered backup list —
+when set, `chat-socket.ts` builds a `ModelRouter` (primary +
+fallbacks, cost tier inferred automatically per provider id) instead of a
+single `createProvider()` call, and every routing decision streams to the
+client as a normal `log` message, visible in the Tool Activity panel.
+Proven end-to-end in `apps/server/src/e2e.test.ts`: a real WebSocket chat
+request with an unreachable primary and a working fallback completes via
+the fallback, with the fallback event visible in the log stream.
+
 ## Model/provider settings
 
 `ProviderSettings` (`packages/shared`):
 
 ```ts
 interface ProviderSettings {
-  provider: string;       // "ollama" | "openai" | "openrouter" | "openai-compatible" | "anthropic"
+  provider: string;       // "ollama" | "openai" | "openrouter" | "openai-compatible" | "anthropic" | "gemini"
   model: string;
   apiKey?: string;
   baseUrl?: string;

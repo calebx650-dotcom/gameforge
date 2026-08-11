@@ -533,4 +533,80 @@ describe("GameForge end-to-end smoke test", () => {
       await new Promise((resolve) => fakeUnityMcp.close(resolve));
     }
   });
+
+  it("falls back to a working backup provider when the primary is unreachable (P1.5 model routing)", async () => {
+    const httpBase = `http://localhost:${gfPort}`;
+
+    // A port nothing is listening on, guaranteed by binding then immediately closing.
+    const deadServer = createHttpServer();
+    await new Promise<void>((resolve) => deadServer.listen(0, resolve));
+    const deadPort = (deadServer.address() as AddressInfo).port;
+    await new Promise((resolve) => deadServer.close(resolve));
+
+    const fakeBackupOllama = createHttpServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        if (req.url === "/api/tags") {
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ models: [{ name: "backup-model" }] }));
+          return;
+        }
+        if (req.url === "/api/chat") {
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ message: { content: "Answered by the backup provider." }, prompt_eval_count: 1, eval_count: 1 }));
+          return;
+        }
+        res.statusCode = 404;
+        res.end();
+      });
+    });
+    await new Promise<void>((resolve) => fakeBackupOllama.listen(0, resolve));
+    const backupPort = (fakeBackupOllama.address() as AddressInfo).port;
+
+    try {
+      const routerProjectRoot = await mkdtemp(join(tmpdir(), "gf-e2e-router-"));
+      const openRes = await request(httpBase).post("/api/projects").send({ path: routerProjectRoot });
+      const projectId = openRes.body.id;
+
+      const result = await new Promise<{ finalText: string; sawFallbackLog: boolean }>((resolve, reject) => {
+        const ws = new WebSocket(`ws://localhost:${gfPort}/ws/chat`);
+        const timeout = setTimeout(() => reject(new Error("router fallback e2e timed out")), 10_000);
+        let sawFallbackLog = false;
+
+        ws.on("open", () => {
+          ws.send(
+            JSON.stringify({
+              type: "chat",
+              projectId,
+              mode: "ask",
+              providerSettings: { provider: "ollama", model: "primary-model", baseUrl: `http://127.0.0.1:${deadPort}` },
+              fallbackProviderSettings: [{ provider: "ollama", model: "backup-model", baseUrl: `http://127.0.0.1:${backupPort}` }],
+              message: "hello",
+            }),
+          );
+        });
+
+        ws.on("message", (raw) => {
+          const msg = JSON.parse(raw.toString());
+          if (msg.type === "log" && /Falling back/.test(msg.entry.summary)) {
+            sawFallbackLog = true;
+          } else if (msg.type === "result") {
+            clearTimeout(timeout);
+            const finalMessage = msg.messages[msg.messages.length - 1];
+            ws.close();
+            resolve({ finalText: finalMessage.content, sawFallbackLog });
+          } else if (msg.type === "error") {
+            clearTimeout(timeout);
+            reject(new Error(msg.message));
+          }
+        });
+      });
+
+      expect(result.sawFallbackLog).toBe(true);
+      expect(result.finalText).toBe("Answered by the backup provider.");
+    } finally {
+      await new Promise((resolve) => fakeBackupOllama.close(resolve));
+    }
+  });
 });

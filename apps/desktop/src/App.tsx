@@ -5,7 +5,7 @@ import { GitPanel } from "./GitPanel.js";
 import { isKeychainAvailable, keychainDelete, keychainErrorMessage, keychainGet, keychainSet } from "./keychain.js";
 import { deriveBuildAttempts, deriveFilesChanged } from "./build-status.js";
 
-const PROVIDERS = ["ollama", "openai", "openrouter", "anthropic", "openai-compatible"] as const;
+const PROVIDERS = ["ollama", "openai", "openrouter", "anthropic", "gemini", "openai-compatible"] as const;
 const MODES: AgentMode[] = ["ask", "assist", "build", "autonomous"];
 const ENGINES = ["none", "unity", "godot"] as const;
 

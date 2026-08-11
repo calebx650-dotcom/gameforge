@@ -93,17 +93,60 @@ and the live Unity/Ollama session for the demo run itself).
 
 ## P1.5 — Model orchestration
 
-**Status: Not started.** Today a session picks exactly one provider and
-model manually per request (`packages/llm`'s `LLMProvider` interface
-already supports Ollama/OpenAI-compatible/OpenRouter/Anthropic, so the
-adapters exist — there's just no router on top of them).
+**Status: Done.** A session can still pick exactly one provider/model
+manually (unchanged, default behavior); it can now also hand the router an
+ordered candidate list and let it pick and fall back automatically.
 
-- [ ] Model router
-- [ ] Codex, Claude, Gemini, OpenRouter, Ollama as interchangeable backends
-      behind that router (Claude/OpenRouter/Ollama adapters already exist;
-      Codex and Gemini adapters do not)
-- [ ] Automatic fallback on provider error
-- [ ] Capability/cost-aware routing
+- [x] Model router — `packages/llm/src/router.ts`'s `ModelRouter`
+      implements `LLMProvider` itself, so `Agent` (or anything else that
+      only knows the `LLMProvider` interface) uses one with zero code
+      changes — it has no idea routing is happening underneath. Provider
+      instances for each candidate are constructed lazily and cached, so a
+      router configured with several candidates doesn't eagerly stand up
+      connections to ones a given request never needs.
+- [x] Codex, Claude, Gemini, OpenRouter, Ollama as interchangeable backends
+      — Claude/OpenRouter/Ollama adapters already existed; **Gemini is new**
+      (`packages/llm/src/providers/gemini.ts`, against Google's real
+      documented Generative Language API — `generateContent`/
+      `streamGenerateContent?alt=sse`, `x-goog-api-key` header — following
+      the same "coded against the vendor's real documented wire format, not
+      exercised against a live account in this environment" pattern as the
+      Meshy/Tripo3D/DeepMotion cloud adapters elsewhere in this repo; see
+      PROVIDERS.md). "Codex" isn't a separate adapter — OpenAI's Codex
+      models are reached through the existing `OpenAICompatibleProvider`
+      exactly like any other OpenAI model, so there was nothing new to
+      build there.
+- [x] Automatic fallback on provider error — `ModelRouter.generate()`/
+      `stream()` try each eligible candidate in order and fall back to the
+      next on failure, *except* mid-stream after a candidate has already
+      yielded real output to the caller (switching backends at that point
+      could duplicate or corrupt what the caller already consumed — that
+      case propagates the error instead of silently rerouting). Unit-tested
+      (12 cases in `router.test.ts`): success on the first try, fallback on
+      failure, fallback mid-stream-before-any-output vs. no-fallback-after-
+      output, and an aggregate error when every candidate fails. Wired into
+      the actual product, not just the library: `ChatRequest` gained an
+      optional `fallbackProviderSettings` list
+      (`apps/server/src/chat-socket.ts`) — when set, the server builds a
+      `ModelRouter` instead of a single provider, and every routing
+      decision (including *why* a fallback happened) streams to the client
+      as a normal `log` message, visible in the Tool Activity panel like
+      anything else that happened during the run. Proven end-to-end in
+      `apps/server/src/e2e.test.ts`: a real WebSocket chat request with an
+      unreachable primary provider and a working fallback genuinely
+      completes via the fallback, with the fallback event visible in the
+      log stream.
+- [x] Capability/cost-aware routing — a candidate whose provider doesn't
+      support vision is skipped for a request with an image; one that
+      doesn't support tool calling is skipped for a request with `tools` —
+      both are static per-provider facts (`LLMProvider.supportsVision`/
+      `supportsTools`), so this needs no network call to decide. Cost-aware
+      ordering is a coarse two-tier hint (`"free"` vs `"paid"`) the caller
+      attaches per candidate; within the set that satisfies a request's
+      capability requirements, free candidates are tried first, with the
+      caller's given order as the tiebreaker. `apps/server` infers the tier
+      automatically per request (`ollama` = free/local, everything else =
+      paid) rather than requiring the client to specify it.
 
 ## P2 — Game intelligence
 
