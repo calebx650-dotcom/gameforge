@@ -1,4 +1,4 @@
-import type { AgentMode, ChatMessage, OperationLogEntry, ToolCall } from "@gameforge/shared";
+import type { AgentMode, ChatMessage, OperationLogEntry, ToolCall, ToolResultMessage } from "@gameforge/shared";
 import type { GenerateResult, LLMProvider } from "@gameforge/llm";
 import { ToolExecutor, type TaskPlanSnapshot } from "@gameforge/tools";
 import { buildVideoAnalysisMessage } from "@gameforge/vision";
@@ -35,6 +35,14 @@ export interface AgentOptions {
    * of the same failure before giving up. Defaults to 3.
    */
   maxConsecutiveToolFailures?: number;
+  /**
+   * Whether this agent may spawn a nested sub-agent via the
+   * `delegate_subtask` tool — defaults to `true` for a normal, top-level
+   * run. A sub-agent this agent itself spawns is always constructed with
+   * this set to `false`, so a sub-agent can never delegate further —
+   * bounding recursion at one level rather than needing a depth counter.
+   */
+  allowDelegation?: boolean;
   temperature?: number;
   maxOutputTokens?: number;
   onLogEntry?: (entry: OperationLogEntry) => void;
@@ -71,6 +79,8 @@ export interface AgentRunResult {
 
 const DEFAULT_MAX_ITERATIONS = 10;
 const DEFAULT_MAX_CONSECUTIVE_TOOL_FAILURES = 3;
+const DEFAULT_SUBTASK_MAX_ITERATIONS = 5;
+const SUBTASK_MAX_ITERATIONS_CEILING = 8;
 const MUTATING_FILE_TOOLS = new Set(["create_file", "edit_file", "delete_file"]);
 
 /**
@@ -108,10 +118,11 @@ export class Agent {
         return this.buildResult(messages, iteration - 1, "timed_out");
       }
 
+      const availableTools = this.options.executor.getAvailableTools();
       const generateOptions = {
         model: this.options.model,
         messages,
-        tools: this.options.executor.getAvailableTools(),
+        tools: this.options.allowDelegation === false ? availableTools.filter((t) => t.name !== "delegate_subtask") : availableTools,
         temperature: this.options.temperature,
         maxOutputTokens: this.options.maxOutputTokens,
         signal: this.options.signal,
@@ -170,7 +181,10 @@ export class Agent {
 
   private async executeAndRecord(call: ToolCall, messages: ChatMessage[]): Promise<void> {
     this.record({ timestamp: Date.now(), kind: "tool_call", summary: `${call.name}(${summarizeArgs(call)})`, detail: call });
-    const toolResult = await this.options.executor.execute(call, this.options.mode, this.options.signal);
+    const toolResult =
+      call.name === "delegate_subtask"
+        ? await this.runDelegatedSubtask(call)
+        : await this.options.executor.execute(call, this.options.mode, this.options.signal);
     messages.push(toolResult);
     this.record({
       timestamp: Date.now(),
@@ -188,6 +202,85 @@ export class Agent {
     if (call.name === "capture_screenshot" && !toolResult.isError) {
       this.spliceScreenshotForAnalysis(toolResult.content, messages);
     }
+  }
+
+  /**
+   * `delegate_subtask` (P3.5 multi-agent orchestration) — a minimal, real
+   * primitive: this agent spawns a fresh, independent `Agent` to handle
+   * one focused delegated task, waits for it to finish, and returns its
+   * final response as the tool result. The sub-agent shares this agent's
+   * real provider/model/executor/mode — it operates on the same actual
+   * project through the same permission-gated tool set, not a sandbox —
+   * but gets its own short iteration budget (default 5, hard-capped at 8
+   * regardless of what the model asks for) and `allowDelegation: false`,
+   * so recursion is bounded at exactly one level rather than needing a
+   * depth counter threaded through every layer.
+   *
+   * Only allowed in `build`/`autonomous` mode — `ask`/`assist` don't have
+   * a way to route a mid-delegation approval prompt back through this
+   * class (only `ToolExecutor`'s injected `requestApproval` callback can
+   * do that, and this bypasses `ToolExecutor` for the delegation call
+   * itself), so those modes get a clear denial instead of either silently
+   * skipping approval or blocking on a prompt nothing can answer.
+   *
+   * Known real limitation, documented rather than hidden: the sub-agent's
+   * file modifications count toward *its own* `fileModificationCount`,
+   * not this agent's — a parent's `maxFileModifications` budget doesn't
+   * see what a delegated sub-agent did. Fine for the bounded, occasional
+   * delegation this is designed for; would need real shared-state plumbing
+   * to fix if delegation becomes a primary way work gets done.
+   */
+  private async runDelegatedSubtask(call: ToolCall): Promise<ToolResultMessage> {
+    if (this.options.allowDelegation === false) {
+      // Defense in depth: the tools list a sub-agent is offered already excludes
+      // delegate_subtask (see run()'s filtering above), so a well-behaved model
+      // never requests it — this only matters if one asks anyway.
+      return {
+        role: "tool",
+        toolCallId: call.id,
+        name: call.name,
+        content: "This agent is a sub-agent and cannot delegate further (no nested delegation chains).",
+        isError: true,
+      };
+    }
+    if (this.options.mode !== "build" && this.options.mode !== "autonomous") {
+      return {
+        role: "tool",
+        toolCallId: call.id,
+        name: call.name,
+        content: `delegate_subtask requires build or autonomous mode (current mode: "${this.options.mode}").`,
+        isError: true,
+      };
+    }
+    const task = String(call.arguments.task ?? "");
+    if (!task.trim()) {
+      return { role: "tool", toolCallId: call.id, name: call.name, content: "delegate_subtask requires a non-empty 'task'.", isError: true };
+    }
+    const requestedMaxIterations = Number(call.arguments.maxIterations) || DEFAULT_SUBTASK_MAX_ITERATIONS;
+    const subAgent = new Agent({
+      provider: this.options.provider,
+      model: this.options.model,
+      systemPrompt: `You are a focused sub-agent handling exactly one delegated task. Do the task, then stop — don't expand scope beyond what was asked. Task: ${task}`,
+      executor: this.options.executor,
+      mode: this.options.mode,
+      maxIterations: Math.min(requestedMaxIterations, SUBTASK_MAX_ITERATIONS_CEILING),
+      allowDelegation: false,
+      temperature: this.options.temperature,
+      maxOutputTokens: this.options.maxOutputTokens,
+      signal: this.options.signal,
+      onLogEntry: (entry) => this.record({ ...entry, summary: `[sub-agent] ${entry.summary}` }),
+    });
+
+    const subResult = await subAgent.run([{ role: "user", content: task }]);
+    const finalMessage = subResult.messages[subResult.messages.length - 1];
+    const finalText = typeof finalMessage?.content === "string" ? finalMessage.content : "";
+
+    return {
+      role: "tool",
+      toolCallId: call.id,
+      name: call.name,
+      content: JSON.stringify({ finalText, stoppedReason: subResult.stoppedReason, iterations: subResult.iterations }),
+    };
   }
 
   /**

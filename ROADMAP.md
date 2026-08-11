@@ -313,7 +313,7 @@ and a local-first option behind the same interface:
 
 ## P3.5 — Autonomous development
 
-**Status: Partial.**
+**Status: Done.**
 
 - [x] Multi-step tasks — the agent loop is inherently multi-step within a
       single run.
@@ -343,8 +343,36 @@ and a local-first option behind the same interface:
       file-modification cap (Phase 11).
 - [x] Human approval — the mode-gated permission system, required for
       every mutating/costs-money tool call.
-- [ ] Multi-agent orchestration — **not started.** One agent, one loop,
-      always.
+- [x] Multi-agent orchestration — a real, deliberately minimal primitive,
+      not the full space of possible orchestration patterns: a new
+      `delegate_subtask` tool (`packages/agent/src/agent.ts`) lets an
+      agent spawn a genuinely independent nested `Agent` for one focused
+      task and get its final response back as the tool result. The
+      sub-agent shares the parent's real provider/model/executor/mode —
+      it operates on the actual project through the same permission-gated
+      tools, not a sandbox — but gets its own short iteration budget
+      (default 5, hard-capped at 8 regardless of what's requested) and
+      `allowDelegation: false`, so recursion is bounded at exactly one
+      level rather than needing a depth counter threaded through
+      everything. Requires `build`/`autonomous` mode — `ask`/`assist` get
+      a clear denial, since there's no way to route a mid-delegation
+      approval prompt back through this path (only `ToolExecutor`'s
+      approval callback can do that, and delegation bypasses
+      `ToolExecutor` for the delegation call itself since only `Agent` has
+      the provider/model access needed to construct a sub-agent).
+      Sub-agent activity streams into the parent's own log, prefixed
+      `[sub-agent]`, so it's visible in the Tool Activity panel like
+      anything else. **Known, documented limitation**: a sub-agent's file
+      modifications count toward its own cap, not the parent's
+      `maxFileModifications` budget — real shared-state plumbing would be
+      needed to fix that if delegation becomes a primary way work gets
+      done, not just an occasional escape hatch for separable work.
+      Unit-tested: a real sub-agent spawned, run to completion, and its
+      result returned to the parent; the mode restriction; the tools list
+      correctly not offering delegation to a sub-agent, plus a defense-in-
+      depth check proving a forced nested call is refused even if
+      requested anyway; and the iteration-budget cap actually holding at 8
+      even when 100 was requested.
 
 ## P4 — Production
 

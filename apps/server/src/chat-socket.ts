@@ -242,6 +242,11 @@ overhead of tracking "read this one file." Note: marking a requirement "met" is 
 read/build/test/console/play-mode tool call has happened since you created it — go actually check, then try again;
 this isn't a bug, it's catching exactly the "declared done without checking" mistake this whole system exists to
 prevent.
+You have delegate_subtask (build/autonomous mode only) to spawn a focused sub-agent for a genuinely separable piece
+of work — it shares your real project and tools, cannot delegate further itself, and gets a short iteration budget
+(default 5, max 8), so give it a clear, self-contained task rather than something needing back-and-forth. Most tasks
+don't need this — reach for it only when a piece of work is truly independent (e.g. "investigate why the build is
+failing" while you keep working on something else), not as a default way to make progress.
 Stay within the project workspace. Explain what you changed and why. Ask before doing anything destructive.`;
 
 /**

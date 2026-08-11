@@ -478,4 +478,113 @@ describe("Agent", () => {
     // trailing pair, so the run should complete normally instead of tripping the guard.
     expect(result.stoppedReason).toBe("completed");
   });
+
+  describe("delegate_subtask (P3.5 multi-agent orchestration)", () => {
+    it("spawns a real sub-agent, runs it to completion, and returns its final response to the parent", async () => {
+      const root = await makeProject();
+      const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+      const logEntries: string[] = [];
+      // Provider is shared between parent and sub-agent (delegation reuses it), so this
+      // one script serves both: parent's turn 1 delegates; the sub-agent's own turn 1
+      // (script index 1) finishes immediately; parent's turn 2 (index 2) wraps up.
+      const provider = new ScriptedProvider([
+        {
+          message: { role: "assistant", content: "" },
+          toolCalls: [{ id: "1", name: "delegate_subtask", arguments: { task: "say hello" } }],
+        },
+        { message: { role: "assistant", content: "Sub-agent says hello." } },
+        { message: { role: "assistant", content: "Parent acknowledges the sub-agent's result." } },
+      ]);
+
+      const agent = new Agent({
+        provider,
+        model: "m",
+        systemPrompt: "sys",
+        executor,
+        mode: "build",
+        maxIterations: 10,
+        onLogEntry: (e) => logEntries.push(e.summary),
+      });
+      const result = await agent.run([{ role: "user", content: "delegate the greeting" }]);
+
+      expect(result.stoppedReason).toBe("completed");
+      const delegateResultMessage = result.messages.find((m) => m.role === "tool") as { content: string } | undefined;
+      const delegateResult = JSON.parse(delegateResultMessage!.content);
+      expect(delegateResult.finalText).toBe("Sub-agent says hello.");
+      expect(delegateResult.stoppedReason).toBe("completed");
+      // The sub-agent's own activity is visible in the parent's log, distinguishably tagged.
+      expect(logEntries.some((s) => s.startsWith("[sub-agent]"))).toBe(true);
+    });
+
+    it("refuses to delegate outside build/autonomous mode, without attempting anything", async () => {
+      const root = await makeProject();
+      const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+      const provider = new ScriptedProvider([
+        { message: { role: "assistant", content: "" }, toolCalls: [{ id: "1", name: "delegate_subtask", arguments: { task: "do X" } }] },
+        { message: { role: "assistant", content: "ok, handled it myself" } },
+      ]);
+
+      const agent = new Agent({ provider, model: "m", systemPrompt: "sys", executor, mode: "assist", maxIterations: 5 });
+      const result = await agent.run([{ role: "user", content: "hi" }]);
+
+      const toolResultMessage = result.messages.find((m) => m.role === "tool") as { content: string; isError?: boolean } | undefined;
+      expect(toolResultMessage?.isError).toBe(true);
+      expect(toolResultMessage?.content).toMatch(/requires build or autonomous mode/);
+      expect(result.stoppedReason).toBe("completed");
+    });
+
+    it("does not offer delegate_subtask to a sub-agent, and refuses it defensively if requested anyway (no recursive chains)", async () => {
+      const root = await makeProject();
+      const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+      let subAgentSawDelegateTool = false;
+      class RecordingProvider extends ScriptedProvider {
+        async generate(options: GenerateOptions): Promise<GenerateResult> {
+          if (options.tools?.some((t) => t.name === "delegate_subtask") && options.messages.some((m) => m.content === "try to delegate again")) {
+            subAgentSawDelegateTool = true;
+          }
+          return super.generate(options);
+        }
+      }
+      const provider = new RecordingProvider([
+        { message: { role: "assistant", content: "" }, toolCalls: [{ id: "1", name: "delegate_subtask", arguments: { task: "try to delegate again" } }] },
+        // The sub-agent's own turn: even though it isn't offered delegate_subtask, this
+        // script forces the call anyway, to prove the defense-in-depth check catches it.
+        { message: { role: "assistant", content: "" }, toolCalls: [{ id: "2", name: "delegate_subtask", arguments: { task: "nested" } }] },
+        { message: { role: "assistant", content: "sub-agent gave up on nesting" } },
+        { message: { role: "assistant", content: "parent done" } },
+      ]);
+
+      const agent = new Agent({ provider, model: "m", systemPrompt: "sys", executor, mode: "build", maxIterations: 10 });
+      const result = await agent.run([{ role: "user", content: "hi" }]);
+
+      expect(subAgentSawDelegateTool).toBe(false);
+      expect(result.stoppedReason).toBe("completed");
+      const delegateResultMessage = result.messages.find((m) => m.role === "tool") as { content: string } | undefined;
+      const delegateResult = JSON.parse(delegateResultMessage!.content);
+      // The sub-agent's forced nested call was refused, but the sub-agent itself still completed.
+      expect(delegateResult.finalText).toBe("sub-agent gave up on nesting");
+    });
+
+    it("bounds the sub-agent's iteration budget even if a larger one is requested", async () => {
+      const root = await makeProject();
+      const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+      // The sub-agent's script never produces a final text response, so it will only stop
+      // via max_iterations - proving the requested 100 was actually capped at 8.
+      const provider = new ScriptedProvider([
+        {
+          message: { role: "assistant", content: "" },
+          toolCalls: [{ id: "1", name: "delegate_subtask", arguments: { task: "loop forever", maxIterations: 100 } }],
+        },
+        { message: { role: "assistant", content: "" }, toolCalls: [{ id: "loop", name: "read_file", arguments: { path: "hello.txt" } }] },
+      ]);
+
+      const agent = new Agent({ provider, model: "m", systemPrompt: "sys", executor, mode: "build", maxIterations: 20 });
+      const result = await agent.run([{ role: "user", content: "hi" }]);
+
+      const delegateResultMessage = result.messages.find((m) => m.role === "tool") as { content: string } | undefined;
+      const delegateResult = JSON.parse(delegateResultMessage!.content);
+      expect(delegateResult.stoppedReason).toBe("max_iterations");
+      expect(delegateResult.iterations).toBe(8);
+    });
+  });
 });

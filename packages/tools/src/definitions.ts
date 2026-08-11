@@ -538,6 +538,20 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       required: ["id", "status"],
     },
   },
+  {
+    name: "delegate_subtask",
+    description:
+      "Spawn a focused sub-agent to independently handle one delegated task, and wait for its result. Useful for a genuinely separable piece of work (e.g. 'investigate why the build fails' while you continue planning something else, or splitting a large task into independent chunks). The sub-agent shares your real project and tools but cannot delegate further (no nested chains), and has its own short iteration budget (default 5, max 8) — give it a self-contained task, not something needing your ongoing back-and-forth. Requires build or autonomous mode.",
+    category: "execution",
+    parameters: {
+      type: "object",
+      properties: {
+        task: { type: "string", description: "A clear, self-contained description of exactly what the sub-agent should do." },
+        maxIterations: { type: "number", description: "Defaults to 5; capped at 8 regardless of what's requested." },
+      },
+      required: ["task"],
+    },
+  },
 ];
 
 export function findToolDefinition(name: string): ToolDefinition | undefined {
