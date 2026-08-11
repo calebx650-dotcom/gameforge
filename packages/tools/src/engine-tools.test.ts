@@ -26,6 +26,7 @@ function fakeBridge(overrides: Partial<EngineBridge> = {}): EngineBridge {
     buildProject: vi.fn(async () => ({ success: true })),
     captureScreenshot: vi.fn(async () => ({ base64Png: "abc" })),
     readConsole: vi.fn(async () => []),
+    runTests: vi.fn(async () => ({ jobId: "job-1", status: "succeeded" as const })),
     ...overrides,
   };
 }
@@ -95,5 +96,22 @@ describe("dispatchEngineTool", () => {
     const bridge = fakeBridge();
     await dispatchEngineTool("read_console", { maxMessages: 10 }, bridge);
     expect(bridge.readConsole).toHaveBeenCalledWith({ maxMessages: 10 });
+  });
+
+  it("dispatches run_tests with the real option names and returns the bridge's result", async () => {
+    const bridge = fakeBridge({
+      runTests: vi.fn(async () => ({ jobId: "job-1", status: "succeeded" as const, completed: 2, total: 2 })),
+    });
+    const result = JSON.parse(await dispatchEngineTool("run_tests", { mode: "PlayMode", testNames: ["A"] }, bridge));
+    expect(bridge.runTests).toHaveBeenCalledWith({
+      mode: "PlayMode",
+      testNames: ["A"],
+      groupNames: undefined,
+      categoryNames: undefined,
+      assemblyNames: undefined,
+      includeDetails: undefined,
+      includeFailedTests: undefined,
+    });
+    expect(result).toEqual({ jobId: "job-1", status: "succeeded", completed: 2, total: 2 });
   });
 });

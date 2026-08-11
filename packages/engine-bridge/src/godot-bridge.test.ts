@@ -170,4 +170,20 @@ describe("GodotBridge", () => {
     const messages = await bridge.readConsole();
     expect(messages[0].message).toContain("Nonexistent function");
   });
+
+  it("runs tests via editor.run_tests, forwarding the real options and returning the real result", async () => {
+    let capturedArgs: any;
+    server = await startFakeGodotServer({
+      "editor.run_tests": (args) => {
+        capturedArgs = args;
+        return { jobId: "job-1", status: "succeeded", completed: 4, total: 4, result: { passed: 4 } };
+      },
+    });
+    const bridge = new GodotBridge({ url: server.url });
+    await bridge.connect();
+    const result = await bridge.runTests({ mode: "EditMode", testNames: ["MyTest"] });
+
+    expect(capturedArgs).toMatchObject({ mode: "EditMode", testNames: ["MyTest"] });
+    expect(result).toEqual({ jobId: "job-1", status: "succeeded", completed: 4, total: 4, result: { passed: 4 } });
+  });
 });

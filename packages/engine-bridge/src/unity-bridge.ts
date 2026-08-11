@@ -10,6 +10,9 @@ import type {
   SceneObjectDetail,
   SceneObjectSummary,
   ScreenshotResult,
+  TestFailure,
+  TestRunOptions,
+  TestRunResult,
   TransformData,
 } from "./engine-bridge.js";
 
@@ -176,6 +179,100 @@ export class UnityBridge implements EngineBridge {
       stackTrace: entry.stackTrace ?? undefined,
     }));
   }
+
+  /**
+   * `run_tests`/`get_test_job` are a submit-then-poll async job pair (read
+   * from real unity-mcp source — `Editor/Tools/RunTests.cs`,
+   * `Editor/Services/TestJobManager.cs` — the same way `buildProject`'s fix
+   * was found; see UNITY_BRIDGE.md). `run_tests` returns a `job_id`
+   * immediately; `get_test_job` reports `TestJobManager.ToSerializable()`'s
+   * real fields — `job_id`/`status`("running"/"succeeded"/"failed")/`mode`/
+   * `progress`(`completed`,`total`,`failures_so_far`,...)/`error`/`result`.
+   * The `result` field (the engine's own per-test payload once succeeded)
+   * is passed through as `unknown` rather than typed further: its exact
+   * shape (`TestRunResult.ToSerializable()` server-side, a different class
+   * from this method's own `TestRunResult` return type despite the name
+   * collision) wasn't confirmed against source the way everything else
+   * here was. This method also assumes both tools wrap their payload in
+   * `{success, data}`, matching the confirmed shape of `read_console`'s
+   * response — not independently confirmed for these two tools specifically,
+   * since a live server to check against wasn't available while writing
+   * this. Not yet exercised against a live Editor.
+   */
+  async runTests(options: TestRunOptions = {}): Promise<TestRunResult> {
+    const submitResult = await this.client.callTool("run_tests", {
+      mode: options.mode ?? "EditMode",
+      testNames: options.testNames,
+      groupNames: options.groupNames,
+      categoryNames: options.categoryNames,
+      assemblyNames: options.assemblyNames,
+      includeDetails: options.includeDetails,
+      includeFailedTests: options.includeFailedTests,
+    });
+    const submitted = JSON.parse(extractText(submitResult)) as { job_id: string; status: string; mode?: string };
+    const jobId = submitted.job_id;
+
+    const pollIntervalMs = 2000;
+    const timeoutMs = 5 * 60 * 1000; // Unity test runs can genuinely take minutes, unlike the sub-second refresh_unity poll in buildProject().
+    const startedAt = Date.now();
+
+    while (true) {
+      const jobResult = await this.client.callTool("get_test_job", {
+        job_id: jobId,
+        includeDetails: options.includeDetails,
+        includeFailedTests: options.includeFailedTests,
+      });
+      const parsed = JSON.parse(extractText(jobResult)) as { data?: UnityTestJobPayload } & UnityTestJobPayload;
+      const job = parsed.data ?? parsed;
+
+      if (job.status !== "running") {
+        return unityTestJobToResult(job);
+      }
+      if (Date.now() - startedAt > timeoutMs) {
+        return {
+          jobId,
+          status: "timed_out",
+          mode: job.mode,
+          completed: job.progress?.completed,
+          total: job.progress?.total,
+          failuresSoFar: job.progress?.failures_so_far?.map(toTestFailure),
+          error: `Timed out after ${timeoutMs}ms waiting for test job ${jobId}`,
+        };
+      }
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
+  }
+}
+
+interface UnityTestJobPayload {
+  job_id: string;
+  status: string;
+  mode?: string;
+  error?: string;
+  result?: unknown;
+  progress?: {
+    completed?: number;
+    total?: number;
+    failures_so_far?: Array<{ full_name: string; message: string }>;
+  };
+}
+
+function toTestFailure(f: { full_name: string; message: string }): TestFailure {
+  return { fullName: f.full_name, message: f.message };
+}
+
+function unityTestJobToResult(job: UnityTestJobPayload): TestRunResult {
+  const status = job.status === "succeeded" ? "succeeded" : "failed";
+  return {
+    jobId: job.job_id,
+    status,
+    mode: job.mode,
+    completed: job.progress?.completed,
+    total: job.progress?.total,
+    failuresSoFar: job.progress?.failures_so_far?.map(toTestFailure),
+    error: job.error,
+    result: status === "succeeded" ? job.result : undefined,
+  };
 }
 
 /** Maps unity-mcp's Unity `LogType` names (`Log`/`Warning`/`Error`/`Exception`/`Assert`) onto `ConsoleMessage["level"]`. */

@@ -271,6 +271,24 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: "run_tests",
+    description:
+      "Run the engine's test suite (or a filtered subset) and wait for the result — pass/fail status, progress, and failure details. Submits the run and polls internally until it settles (bounded to 5 minutes), so this one call blocks rather than requiring separate submit/poll calls. Currently Unity-only for real results (via unity-mcp's run_tests/get_test_job); no engine bridge configured, or one without a test runner, fails with a clear message.",
+    category: "engine",
+    parameters: {
+      type: "object",
+      properties: {
+        mode: { type: "string", enum: ["EditMode", "PlayMode"], description: "Defaults to EditMode" },
+        testNames: { type: "array", items: { type: "string" } },
+        groupNames: { type: "array", items: { type: "string" } },
+        categoryNames: { type: "array", items: { type: "string" } },
+        assemblyNames: { type: "array", items: { type: "string" } },
+        includeDetails: { type: "boolean" },
+        includeFailedTests: { type: "boolean" },
+      },
+    },
+  },
+  {
     name: "generate_3d_model",
     description:
       "Generate a 3D model (mesh, with an optional collision mesh) from a text prompt via a configured text-to-3D vendor (e.g. Meshy, Tripo3D). Costs money — always requires approval.",

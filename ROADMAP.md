@@ -214,8 +214,23 @@ no unifying verification layer tying them to what was actually requested.
 
 - [x] Compile — `build_project`.
 - [x] Run — `enter_play_mode`/`exit_play_mode`.
-- [ ] Test — no `run_tests` agent tool wired up yet, though real
-      `mcp-for-unity` exposes `RunTests`/`GetTestJob` tools it could sit on.
+- [x] Test — a new `run_tests` agent tool, submit-then-poll-internally like
+      the generation tools (one blocking call, bounded to 5 minutes, rather
+      than exposing raw submit/poll tools the model would have to sequence
+      itself). `UnityBridge.runTests()` drives real `mcp-for-unity` tools —
+      `run_tests` (submit) and `get_test_job` (poll) — found by reading the
+      actual C# source (`Editor/Tools/RunTests.cs`,
+      `Editor/Services/TestJobManager.cs`), the same way the `buildProject`
+      fix was found; see UNITY_BRIDGE.md for the exact fields confirmed
+      this way vs. one field (the per-test `result` payload's exact shape)
+      that's inferred by analogy to `read_console`'s confirmed response
+      wrapper rather than independently confirmed. `GodotBridge.runTests()`
+      defines the matching `editor.run_tests` command on GameForge's own
+      protocol, consistent with the rest of that bridge — unverified
+      against a real Editor for the same reason every other Godot bridge
+      call is. Unit-tested: real argument names, polling multiple times
+      before settling (fake timers), a bounded timeout when a job never
+      stops running, and both success/failure result shapes.
 - [x] Screenshot — `capture_screenshot`, spliced into the model's next turn.
 - [x] Console inspection — `read_console`.
 - [ ] Requirement verification — **still not built**, now that P2 gives it

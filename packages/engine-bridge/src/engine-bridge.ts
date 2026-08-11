@@ -56,6 +56,41 @@ export interface BuildResult {
   errors?: string[];
 }
 
+export interface TestRunOptions {
+  /** Defaults to "EditMode" (the engine's own default) if omitted. */
+  mode?: "EditMode" | "PlayMode";
+  testNames?: string[];
+  groupNames?: string[];
+  categoryNames?: string[];
+  assemblyNames?: string[];
+  includeDetails?: boolean;
+  includeFailedTests?: boolean;
+}
+
+export interface TestFailure {
+  fullName: string;
+  message: string;
+}
+
+export interface TestRunResult {
+  jobId: string;
+  status: "succeeded" | "failed" | "timed_out";
+  mode?: string;
+  /** Progress at the moment polling stopped — present even on "timed_out" so a caller can see how far it got. */
+  completed?: number;
+  total?: number;
+  failuresSoFar?: TestFailure[];
+  /** Set when status is "failed"/"timed_out" — a run-level error (couldn't start, aborted), not a single failing test. */
+  error?: string;
+  /**
+   * The engine's own per-test result payload once status is "succeeded" —
+   * passed through as-is, not typed further. See `UnityBridge.runTests()`'s
+   * doc comment for why: the exact field shape wasn't confirmed against
+   * source the way the rest of this method's fields were.
+   */
+  result?: unknown;
+}
+
 /**
  * Behind this interface: any game engine's editor-automation surface
  * (Unity via unity-mcp, Godot via a custom EditorPlugin protocol, a future
@@ -92,4 +127,13 @@ export interface EngineBridge {
   buildProject(options?: { target?: string }): Promise<BuildResult>;
   captureScreenshot(): Promise<ScreenshotResult>;
   readConsole(options?: { maxMessages?: number }): Promise<ConsoleMessage[]>;
+  /**
+   * Runs the engine's own test suite (or a filtered subset) and blocks
+   * until it settles, the same submit-then-poll-internally convention
+   * `packages/tools`' generation tools use — simpler for the model than
+   * exposing raw submit/poll tools it would have to remember to call in
+   * sequence, at the cost of holding one agent iteration open for the
+   * run's duration.
+   */
+  runTests(options?: TestRunOptions): Promise<TestRunResult>;
 }

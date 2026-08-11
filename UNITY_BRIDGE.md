@@ -139,6 +139,32 @@ via `uvx`), real project at `GameForgeUnityTest`, HTTP transport, port 8080.
   yet exercised against a real Unity Editor — there's no cheap way to
   force a real `mcp-for-unity` session to expire on demand outside of
   restarting the server mid-session, which hasn't been done live yet.
+- **`run_tests`/`get_test_job` (P2.5 "Test" tier)** — real unity-mcp tools,
+  confirmed by reading the actual C# source directly (not guessed):
+  `Editor/Tools/RunTests.cs` for `run_tests`'s exact argument names
+  (`mode`, `testNames`, `groupNames`, `categoryNames`, `assemblyNames`,
+  `includeDetails`, `includeFailedTests`, plus a `clear_stuck` escape
+  hatch this bridge doesn't expose) and its immediate response
+  (`{job_id, status: "running", mode, include_details, include_failed_tests}`,
+  or `{reason: "tests_running", retry_after_ms}` if a run is already in
+  progress — this bridge doesn't special-case that error, it just
+  surfaces it); `Editor/Services/TestJobManager.cs` for
+  `get_test_job`'s real polled-status fields (`job_id`, `status`
+  — `"running"`/`"succeeded"`/`"failed"` — `mode`, a `progress` object
+  with `completed`/`total`/`failures_so_far`/etc., `error`, and `result`).
+  **One field is inferred, not confirmed**: `get_test_job`'s response
+  wrapper is assumed to be `{success, data}` like `read_console`'s
+  confirmed shape, and the per-test `result` payload once a run succeeds
+  (`TestRunResult.ToSerializable()` server-side — a different class from
+  this bridge's own same-named return type) is passed through as
+  `unknown` rather than typed, since that method's source wasn't
+  reachable to confirm its exact fields. `UnityBridge.runTests()` submits
+  then polls internally (2s interval, 5-minute bound) rather than
+  exposing two raw tools, matching the generation tools' established
+  submit-then-poll convention. Unit-tested against a fake server speaking
+  this real two-tool sequence, including multi-poll-before-settling (fake
+  timers) and the bounded-timeout case; not yet exercised against a live
+  Editor.
 - **Everything else in `UnityBridge`** (`inspectScene`, `createObject`,
   `modifyObject`/`modifyTransform`/`modifyComponent`, `saveScene`,
   `enterPlayMode`/`exitPlayMode`, `captureScreenshot`) is still unverified

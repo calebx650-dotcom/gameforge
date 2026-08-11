@@ -8,6 +8,8 @@ import type {
   SceneObjectDetail,
   SceneObjectSummary,
   ScreenshotResult,
+  TestRunOptions,
+  TestRunResult,
   TransformData,
 } from "./engine-bridge.js";
 
@@ -27,7 +29,7 @@ export interface GodotBridgeConfig {
  * `scene.get_hierarchy`, `scene.get_object`, `scene.create_object`,
  * `scene.modify_object`, `scene.modify_transform`, `scene.set_property`,
  * `scene.save`, `editor.play`, `editor.stop`, `editor.build`,
- * `editor.screenshot`, `editor.read_console`. None of this has been run
+ * `editor.screenshot`, `editor.read_console`, `editor.run_tests`. None of this has been run
  * against a real Godot Editor or plugin in this environment (no Godot
  * install here) — see PROVIDERS.md/ROADMAP.md for that caveat, matching
  * every other adapter in this codebase that talks to a tool this sandbox
@@ -40,7 +42,10 @@ export class GodotBridge implements EngineBridge {
   private readonly client: GodotWsClient;
 
   constructor(config: GodotBridgeConfig = {}) {
-    this.client = new GodotWsClient({ url: config.url ?? "ws://127.0.0.1:6401", signal: config.signal });
+    // requestTimeoutMs is generous (5 min) rather than GodotWsClient's own 10s default,
+    // since it's shared by every command on this client and a test run can legitimately
+    // take a while — every other command still returns in well under that on its own.
+    this.client = new GodotWsClient({ url: config.url ?? "ws://127.0.0.1:6401", signal: config.signal, requestTimeoutMs: 5 * 60 * 1000 });
   }
 
   async connect(): Promise<void> {
@@ -107,5 +112,9 @@ export class GodotBridge implements EngineBridge {
 
   async readConsole(options: { maxMessages?: number } = {}): Promise<ConsoleMessage[]> {
     return (await this.client.send("editor.read_console", { count: options.maxMessages ?? 50 })) as ConsoleMessage[];
+  }
+
+  async runTests(options: TestRunOptions = {}): Promise<TestRunResult> {
+    return (await this.client.send("editor.run_tests", options as Record<string, unknown>)) as TestRunResult;
   }
 }

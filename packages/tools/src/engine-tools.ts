@@ -13,6 +13,7 @@ export const ENGINE_TOOL_NAMES = [
   "build_project",
   "capture_screenshot",
   "read_console",
+  "run_tests",
 ] as const;
 
 export function isEngineTool(name: string): boolean {
@@ -84,6 +85,18 @@ export async function dispatchEngineTool(name: string, args: Record<string, unkn
     case "read_console": {
       const messages = await bridge.readConsole({ maxMessages: args.maxMessages as number | undefined });
       return JSON.stringify(messages);
+    }
+    case "run_tests": {
+      const result = await bridge.runTests({
+        mode: args.mode as "EditMode" | "PlayMode" | undefined,
+        testNames: args.testNames as string[] | undefined,
+        groupNames: args.groupNames as string[] | undefined,
+        categoryNames: args.categoryNames as string[] | undefined,
+        assemblyNames: args.assemblyNames as string[] | undefined,
+        includeDetails: args.includeDetails as boolean | undefined,
+        includeFailedTests: args.includeFailedTests as boolean | undefined,
+      });
+      return JSON.stringify(result);
     }
     default:
       throw new Error(`No engine tool implementation for: ${name}`);

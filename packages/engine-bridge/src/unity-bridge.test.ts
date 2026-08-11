@@ -205,4 +205,137 @@ describe("UnityBridge", () => {
 
     expect(result).toEqual({ success: false, errors: ["CS1002: ; expected"] });
   });
+
+  describe("runTests()", () => {
+    function mockTestServer(handleGetTestJob: (pollCount: number) => unknown) {
+      let pollCount = 0;
+      let capturedRunTestsArgs: any;
+      globalThis.fetch = vi.fn(async (_url, init) => {
+        const body = JSON.parse((init as RequestInit).body as string);
+        if (body.method === "initialize") {
+          return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: {} }), {
+            status: 200,
+            headers: { "Mcp-Session-Id": SESSION_ID, "Content-Type": "application/json" },
+          });
+        }
+        if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
+
+        let result: unknown;
+        if (body.params.name === "run_tests") {
+          capturedRunTestsArgs = body.params.arguments;
+          result = { content: [{ type: "text", text: JSON.stringify({ job_id: "job-1", status: "running", mode: "EditMode" }) }] };
+        } else if (body.params.name === "get_test_job") {
+          pollCount++;
+          result = { content: [{ type: "text", text: JSON.stringify(handleGetTestJob(pollCount)) }] };
+        } else {
+          throw new Error(`unexpected tool call in test: ${body.params.name}`);
+        }
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }) as unknown as typeof fetch;
+      return { getCapturedRunTestsArgs: () => capturedRunTestsArgs };
+    }
+
+    it("submits a test run with the real run_tests argument names", async () => {
+      const { getCapturedRunTestsArgs } = mockTestServer(() => ({
+        data: { job_id: "job-1", status: "succeeded", mode: "EditMode", progress: { completed: 3, total: 3 }, result: { passed: 3 } },
+      }));
+
+      const bridge = new UnityBridge();
+      await bridge.runTests({ mode: "PlayMode", testNames: ["MyTest"], includeDetails: true });
+
+      expect(getCapturedRunTestsArgs()).toMatchObject({ mode: "PlayMode", testNames: ["MyTest"], includeDetails: true });
+    });
+
+    it("polls until succeeded and returns the real per-test result payload", async () => {
+      mockTestServer(() => ({
+        data: { job_id: "job-1", status: "succeeded", mode: "EditMode", progress: { completed: 3, total: 3 }, result: { passed: 3, failed: 0 } },
+      }));
+
+      const bridge = new UnityBridge();
+      const result = await bridge.runTests();
+
+      expect(result).toEqual({
+        jobId: "job-1",
+        status: "succeeded",
+        mode: "EditMode",
+        completed: 3,
+        total: 3,
+        failuresSoFar: undefined,
+        error: undefined,
+        result: { passed: 3, failed: 0 },
+      });
+    });
+
+    it("reports a failed run with the real failure entries, without the (irrelevant) succeeded-only result payload", async () => {
+      mockTestServer(() => ({
+        data: {
+          job_id: "job-1",
+          status: "failed",
+          mode: "EditMode",
+          progress: { completed: 2, total: 3, failures_so_far: [{ full_name: "MyTests.TestFoo", message: "Assertion failed" }] },
+          error: "1 of 3 tests failed",
+        },
+      }));
+
+      const bridge = new UnityBridge();
+      const result = await bridge.runTests();
+
+      expect(result).toEqual({
+        jobId: "job-1",
+        status: "failed",
+        mode: "EditMode",
+        completed: 2,
+        total: 3,
+        failuresSoFar: [{ fullName: "MyTests.TestFoo", message: "Assertion failed" }],
+        error: "1 of 3 tests failed",
+        result: undefined,
+      });
+    });
+
+    it("polls again after a running status before the job finally settles", async () => {
+      vi.useFakeTimers();
+      try {
+        mockTestServer((pollCount) =>
+          pollCount < 3
+            ? { data: { job_id: "job-1", status: "running", mode: "EditMode", progress: { completed: pollCount, total: 5 } } }
+            : { data: { job_id: "job-1", status: "succeeded", mode: "EditMode", progress: { completed: 5, total: 5 }, result: { passed: 5 } } },
+        );
+
+        const bridge = new UnityBridge();
+        const resultPromise = bridge.runTests();
+        // Two "running" polls happen before the third (settled) one; advance past both waits.
+        await vi.advanceTimersByTimeAsync(2000);
+        await vi.advanceTimersByTimeAsync(2000);
+        const result = await resultPromise;
+
+        expect(result.status).toBe("succeeded");
+        expect(result.result).toEqual({ passed: 5 });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("gives up after the bounded timeout if the job never stops running, rather than waiting forever", async () => {
+      vi.useFakeTimers();
+      try {
+        mockTestServer((pollCount) => ({
+          data: { job_id: "job-1", status: "running", mode: "EditMode", progress: { completed: pollCount, total: 100 } },
+        }));
+
+        const bridge = new UnityBridge();
+        const resultPromise = bridge.runTests();
+        await vi.advanceTimersByTimeAsync(6 * 60 * 1000); // past the 5-minute bound
+        const result = await resultPromise;
+
+        expect(result.status).toBe("timed_out");
+        expect(result.jobId).toBe("job-1");
+        expect(result.error).toMatch(/Timed out/);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });
