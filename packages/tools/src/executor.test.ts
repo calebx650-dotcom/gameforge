@@ -427,4 +427,87 @@ describe("ToolExecutor", () => {
 
     expect(JSON.parse(result.content)).toEqual({ dependsOn: ["helper.ts"], dependedOnBy: [] });
   });
+
+  describe("plugins (P4 plugin architecture)", () => {
+    function fakePlugin(overrides: Partial<{ definition: Partial<import("@gameforge/shared").ToolDefinition>; dispatch: (args: any) => Promise<string> | string }> = {}) {
+      return {
+        filePath: "/fake/plugin.mjs",
+        definition: {
+          name: "greet",
+          description: "Says hello",
+          category: "read" as const,
+          mutating: false,
+          parameters: { type: "object", properties: {} },
+          ...overrides.definition,
+        },
+        dispatch: overrides.dispatch ?? (async (args: any) => `Hello, ${args.name}!`),
+      };
+    }
+
+    it("dispatches a call to a loaded plugin's real implementation", async () => {
+      const root = await makeProject();
+      const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true, {}, undefined, [fakePlugin()]);
+
+      const result = await executor.execute({ id: "1", name: "greet", arguments: { name: "World" } }, "ask");
+
+      expect(result.isError).toBeFalsy();
+      expect(result.content).toBe("Hello, World!");
+    });
+
+    it("includes plugin tools in getAvailableTools()", async () => {
+      const root = await makeProject();
+      const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true, {}, undefined, [fakePlugin()]);
+      expect(executor.getAvailableTools().some((t) => t.name === "greet")).toBe(true);
+    });
+
+    it("applies the exact same permission gating to a plugin tool as a built-in one — a plugin cannot exempt itself", async () => {
+      const root = await makeProject();
+      let approvalCalled = false;
+      const mutatingPlugin = fakePlugin({ definition: { category: "write", mutating: true } });
+      const executor = new ToolExecutor(
+        new WorkspaceGuard(root),
+        async () => {
+          approvalCalled = true;
+          return true;
+        },
+        {},
+        undefined,
+        [mutatingPlugin],
+      );
+
+      // "ask" mode denies any mutating tool outright, plugin or not.
+      const denied = await executor.execute({ id: "1", name: "greet", arguments: { name: "x" } }, "ask");
+      expect(denied.isError).toBe(true);
+      expect(denied.content).toMatch(/not permitted/);
+      expect(approvalCalled).toBe(false);
+
+      // "assist" mode requires approval, same as any other mutating tool.
+      const approved = await executor.execute({ id: "2", name: "greet", arguments: { name: "x" } }, "assist");
+      expect(approved.isError).toBeFalsy();
+      expect(approvalCalled).toBe(true);
+    });
+
+    it("reports an unknown tool error for a plugin name that wasn't loaded, same as any unrecognized tool", async () => {
+      const root = await makeProject();
+      const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true, {}, undefined, []);
+      const result = await executor.execute({ id: "1", name: "greet", arguments: {} }, "ask");
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/Unknown tool/);
+    });
+
+    it("surfaces a plugin's own thrown error as a normal tool error, not a crash", async () => {
+      const root = await makeProject();
+      const throwingPlugin = fakePlugin({
+        dispatch: async () => {
+          throw new Error("plugin exploded");
+        },
+      });
+      const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true, {}, undefined, [throwingPlugin]);
+
+      const result = await executor.execute({ id: "1", name: "greet", arguments: {} }, "ask");
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toBe("plugin exploded");
+    });
+  });
 });

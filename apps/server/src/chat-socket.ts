@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import type { WebSocket } from "ws";
 import type { AgentMode, ChatMessage, ContentPart, ProviderSettings, ToolCall } from "@gameforge/shared";
 import { createProvider, ModelRouter, type RouterCandidate } from "@gameforge/llm";
 import { Agent } from "@gameforge/agent";
-import { ToolExecutor, maybeCreateCheckpoint, type GenerationProviders } from "@gameforge/tools";
+import { ToolExecutor, maybeCreateCheckpoint, loadPlugins, type GenerationProviders } from "@gameforge/tools";
 import { summarizeProjectContext } from "@gameforge/project";
 import { createText3DProvider, createPBRMaterialProvider, type AssetGenerationSettings } from "@gameforge/assets3d";
 import { createAutoRigProvider, createMotionProvider, type RiggingSettings } from "@gameforge/rigging";
@@ -322,6 +323,15 @@ export function handleChatConnection(socket: WebSocket, projects: ProjectManager
       send(socket, { type: "log", entry: { timestamp: Date.now(), kind: "error", summary: `Engine bridge not configured: ${(err as Error).message}` } });
     }
 
+    // Loaded fresh per request (cheap for the handful of files a project realistically
+    // has) rather than cached, so an edited plugin is picked up on the next message
+    // without restarting the server. See plugin-loader.ts for the file shape and the
+    // real security posture (full process privileges, same trust level as run_command).
+    const { plugins, errors: pluginErrors } = await loadPlugins(join(session.guard.root, ".gameforge", "plugins"));
+    for (const error of pluginErrors) {
+      send(socket, { type: "log", entry: { timestamp: Date.now(), kind: "error", summary: `Plugin failed to load (${error.filePath}): ${error.message}` } });
+    }
+
     const executor = new ToolExecutor(
       session.guard,
       (call: ToolCall, reason: string) => {
@@ -333,6 +343,7 @@ export function handleChatConnection(socket: WebSocket, projects: ProjectManager
       },
       buildGenerationProviders(request.generationSettings),
       engineBridge,
+      plugins,
     );
 
     let provider;

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtemp, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
@@ -815,5 +815,97 @@ describe("GameForge end-to-end smoke test", () => {
     expect(runsRes.body).toContain(runId);
     const runRes = await request(httpBase).get(`/api/projects/${projectId}/runs/${runId}`);
     expect(runRes.body).toEqual(entries);
+  });
+
+  it("loads a real plugin file from .gameforge/plugins and dispatches to it through a live chat request (P4 plugin architecture)", async () => {
+    const httpBase = `http://localhost:${gfPort}`;
+
+    const pluginProjectRoot = await mkdtemp(join(tmpdir(), "gf-e2e-plugin-"));
+    const pluginsDir = join(pluginProjectRoot, ".gameforge", "plugins");
+    await mkdir(pluginsDir, { recursive: true });
+    await writeFile(
+      join(pluginsDir, "dice.mjs"),
+      `export const definition = {
+        name: "roll_dice",
+        description: "Rolls a fixed-result die for testing.",
+        category: "read",
+        mutating: false,
+        parameters: { type: "object", properties: {}, required: [] },
+      };
+      export async function dispatch() {
+        return "rolled a 4";
+      }`,
+    );
+
+    let modelStep = 0;
+    const modelScript = [
+      { message: { content: "", tool_calls: [{ function: { name: "roll_dice", arguments: {} } }] } },
+      { message: { content: "The die landed on 4." } },
+    ];
+    const fakePluginModel = createHttpServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        if (req.url === "/api/tags") {
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ models: [{ name: "llama3.1:8b" }] }));
+          return;
+        }
+        if (req.url === "/api/chat") {
+          const next = modelScript[Math.min(modelStep, modelScript.length - 1)];
+          modelStep++;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ ...next, prompt_eval_count: 5, eval_count: 5 }));
+          return;
+        }
+        res.statusCode = 404;
+        res.end();
+      });
+    });
+    await new Promise<void>((resolve) => fakePluginModel.listen(0, resolve));
+    const fakePluginModelPort = (fakePluginModel.address() as AddressInfo).port;
+
+    try {
+      const openRes = await request(httpBase).post("/api/projects").send({ path: pluginProjectRoot });
+      const projectId = openRes.body.id;
+
+      const result = await new Promise<{ finalText: string; toolResultContent: string | undefined }>((resolve, reject) => {
+        const ws = new WebSocket(`ws://localhost:${gfPort}/ws/chat`);
+        const timeout = setTimeout(() => reject(new Error("plugin e2e timed out")), 10_000);
+
+        ws.on("open", () => {
+          ws.send(
+            JSON.stringify({
+              type: "chat",
+              projectId,
+              mode: "ask",
+              providerSettings: { provider: "ollama", model: "llama3.1:8b", baseUrl: `http://127.0.0.1:${fakePluginModelPort}` },
+              message: "Roll the dice.",
+            }),
+          );
+        });
+
+        ws.on("message", (raw) => {
+          const msg = JSON.parse(raw.toString());
+          if (msg.type === "result") {
+            clearTimeout(timeout);
+            const finalMessage = msg.messages[msg.messages.length - 1];
+            const toolResultMessage = msg.messages.find((m: { role: string; name?: string }) => m.role === "tool" && m.name === "roll_dice");
+            ws.close();
+            resolve({ finalText: finalMessage.content, toolResultContent: toolResultMessage?.content });
+          } else if (msg.type === "error") {
+            clearTimeout(timeout);
+            reject(new Error(msg.message));
+          }
+        });
+      });
+
+      // Proves the plugin's own dispatch() ran for real, not a stub — the
+      // "rolled a 4" string only exists inside the .mjs fixture file above.
+      expect(result.toolResultContent).toBe("rolled a 4");
+      expect(result.finalText).toContain("4");
+    } finally {
+      await new Promise((resolve) => fakePluginModel.close(resolve));
+    }
   });
 });

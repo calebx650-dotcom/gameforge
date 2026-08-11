@@ -20,6 +20,7 @@ import { gitStatusTool, gitDiffTool, gitLogTool, gitBranchTool, gitCommitTool } 
 import { getAvailableTools } from "./tool-scope.js";
 import { TaskPlanTracker } from "./planning-tools.js";
 import { buildDependencyGraph, findDependencies, findDependents } from "@gameforge/project";
+import type { LoadedPlugin } from "./plugin-loader.js";
 
 export type ApprovalRequest = (call: ToolCall, reason: string) => Promise<boolean>;
 
@@ -31,13 +32,17 @@ export type ApprovalRequest = (call: ToolCall, reason: string) => Promise<boolea
  */
 export class ToolExecutor {
   private readonly taskPlanTracker = new TaskPlanTracker();
+  private readonly pluginsByName: Map<string, LoadedPlugin>;
 
   constructor(
     private readonly guard: WorkspaceGuard,
     private readonly requestApproval: ApprovalRequest,
     private readonly generationProviders: GenerationProviders = {},
     private readonly engineBridge?: EngineBridge,
-  ) {}
+    plugins: LoadedPlugin[] = [],
+  ) {
+    this.pluginsByName = new Map(plugins.map((p) => [p.definition.name, p]));
+  }
 
   /** The plan/requirements state `set_plan`/`set_requirements`/`update_requirement_status` calls have accumulated so far in this executor's lifetime (one per chat request). */
   getTaskPlanTracker(): TaskPlanTracker {
@@ -46,16 +51,17 @@ export class ToolExecutor {
 
   /**
    * The tools this session can actually use, given whichever generation
-   * vendors and engine bridge were configured — see tool-scope.ts. This is
-   * what should be sent to the model on every turn instead of the full,
-   * static `TOOL_DEFINITIONS` list.
+   * vendors and engine bridge were configured — see tool-scope.ts — plus
+   * whatever plugins were loaded for this session (P4 plugin architecture,
+   * see plugin-loader.ts). This is what should be sent to the model on
+   * every turn instead of the full, static `TOOL_DEFINITIONS` list.
    */
   getAvailableTools(): ToolDefinition[] {
-    return getAvailableTools(this.generationProviders, this.engineBridge);
+    return [...getAvailableTools(this.generationProviders, this.engineBridge), ...Array.from(this.pluginsByName.values(), (p) => p.definition)];
   }
 
   async execute(call: ToolCall, mode: AgentMode, signal?: AbortSignal): Promise<ToolResultMessage> {
-    const definition = findToolDefinition(call.name);
+    const definition = findToolDefinition(call.name) ?? this.pluginsByName.get(call.name)?.definition;
     if (!definition) {
       return this.errorResult(call, `Unknown tool: ${call.name}`);
     }
@@ -153,14 +159,19 @@ export class ToolExecutor {
         );
         return JSON.stringify(requirement);
       }
-      default:
+      default: {
         if (isGenerationTool(call.name)) {
           return dispatchGenerationTool(call.name, args, this.generationProviders);
         }
         if (isEngineTool(call.name)) {
           return dispatchEngineTool(call.name, args, this.engineBridge);
         }
+        const plugin = this.pluginsByName.get(call.name);
+        if (plugin) {
+          return plugin.dispatch(args);
+        }
         throw new Error(`No implementation registered for tool: ${call.name}`);
+      }
     }
   }
 

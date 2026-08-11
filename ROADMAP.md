@@ -461,7 +461,54 @@ and a local-first option behind the same interface:
       Windows packaging unexercised.
 - [x] Documentation — README/ARCHITECTURE/SECURITY/PROVIDERS/
       UNITY_BRIDGE.md/this file, kept current as of each real change.
-- [ ] Plugin architecture — **not built.**
+- [x] Plugin architecture — real, dynamic loading, not a hardcoded
+      registry: `loadPlugins()` (`packages/tools/src/plugin-loader.ts`)
+      `readdir`s a project's `.gameforge/plugins/` directory, dynamic-
+      `import()`s every `.mjs` file it finds (cache-busted per call so an
+      edited plugin is picked up on the next chat request without a
+      server restart — `chat-socket.ts` calls `loadPlugins` fresh per
+      request, not once at startup), and validates each module exports
+      `{ definition: ToolDefinition, dispatch: (args) => Promise<string>|
+      string }`. A plugin that's missing the shape, or that throws during
+      import, is reported as a load error (surfaced to the client as a WS
+      log entry) without preventing any other valid plugin in the same
+      directory from loading — a missing `plugins/` directory is not an
+      error either, just an empty result. `ToolExecutor` takes the loaded
+      plugins as a constructor argument, folds their `ToolDefinition`s
+      into `getAvailableTools()`, and dispatches unrecognized tool names
+      to the matching plugin's `dispatch()`. The one thing that actually
+      matters here: a plugin's `ToolDefinition` goes through the *exact
+      same* `decidePermission()` mode-gating (category/mutating/
+      costsMoney/dangerous) as every built-in tool — there is no
+      exemption a plugin can declare for itself, proven by a dedicated
+      test that gives a fake plugin a mutating category and confirms it's
+      denied in ask-mode and requires approval in assist-mode, identical
+      to a built-in mutating tool. **Security posture, stated plainly (in
+      code comments and here, not glossed over)**: plugins are ordinary
+      Node ES modules that run with full process privileges the moment
+      they're imported — the same trust level as `run_command`, not a
+      sandboxed extension API. The permission system still gates *when* a
+      plugin's declared tool can be invoked, but nothing stops a plugin's
+      module-level code from doing anything Node can do at import time.
+      Only point `.gameforge/plugins/` at directories you trust. Tested
+      at three levels: `plugin-loader.test.ts` (6 tests, all against real
+      `.mjs` fixture files written to real temp directories — valid load
+      + real dispatch, multiple plugins, malformed-plugin and throws-on-
+      import error collection without losing the other valid plugins,
+      non-`.mjs` files ignored, missing directory tolerated);
+      `executor.test.ts` (5 new tests — dispatch to a real plugin
+      implementation, plugin tools appearing in `getAvailableTools()`,
+      permission-gating parity, unknown/unloaded plugin name reported
+      the same as any other unrecognized tool, a plugin's own thrown
+      error surfacing as a normal `isError` tool result instead of
+      crashing the executor); and a real end-to-end test in
+      `e2e.test.ts` that writes a fixture plugin `.mjs` file into a real
+      project's `.gameforge/plugins/`, drives a full chat request over a
+      real WebSocket connection against a scripted fake model server that
+      calls the plugin's declared tool, and asserts on the plugin's own
+      `dispatch()` return value flowing back through the executor and
+      into the final assistant message — proving the whole path is real,
+      not stubbed at any layer.
 - [ ] Release — no release process exists yet.
 
 ---

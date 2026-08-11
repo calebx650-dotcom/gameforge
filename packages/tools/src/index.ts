@@ -24,4 +24,6 @@ export { dispatchEngineTool, isEngineTool, ENGINE_TOOL_NAMES } from "./engine-to
 export { getAvailableTools } from "./tool-scope.js";
 export { TaskPlanTracker } from "./planning-tools.js";
 export type { Requirement, RequirementStatus, TaskPlanSnapshot } from "./planning-tools.js";
+export { loadPlugins } from "./plugin-loader.js";
+export type { PluginModule, LoadedPlugin, PluginLoadError, PluginLoadResult } from "./plugin-loader.js";
 export { GENERATION_TOOL_PROVIDER_KEY } from "./generation-tools.js";
