@@ -155,7 +155,24 @@ ordered candidate list and let it pick and fall back automatically.
 - [x] Project memory — `packages/memory` (SQLite via `node:sqlite`).
 - [x] Project indexing — `packages/project`'s scanner (engine/language/git
       status/docs), basic rather than deep.
-- [ ] Dependency graph — **not built.**
+- [x] Dependency graph — a real file-level import graph, **TypeScript/
+      JavaScript only** by deliberate scope, not oversight
+      (`packages/project/src/dependency-graph.ts`). A TS/JS `import`
+      names a real relative file path, resolvable on disk (including the
+      "`.js` specifier resolves to a real `.ts` file" case TS's own ESM
+      output produces, and directory-index imports); C#'s `using` names a
+      *namespace*, not a file, so answering "what does this file depend
+      on" for C# honestly needs real symbol resolution this file-path
+      approach can't do — a non-JS/TS project gets an empty graph back,
+      not a fabricated one built from `using` statements. Exposed as a
+      new read-only `inspect_dependencies` agent tool (path in, `{dependsOn,
+      dependedOnBy}` out) so the model can check "what would this change
+      affect" without reading every file by hand. Unit-tested against real
+      fixture files on disk (8 cases: resolution, external-package
+      exclusion, `require()`, directory-index imports, a dangling import
+      correctly dropped rather than fabricated, reverse lookup, node_modules
+      never walked, and the empty-graph-for-non-JS/TS case) plus executor-
+      level tests proving the tool dispatch and path normalization.
 - [x] Context selection — `ToolExecutor.getAvailableTools()`
       (`packages/tools/src/tool-scope.ts`) scopes which *tools* a session
       sees; there's no analogous system for selecting which *project

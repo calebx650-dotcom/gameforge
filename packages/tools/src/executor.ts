@@ -19,6 +19,7 @@ import { dispatchEngineTool, isEngineTool } from "./engine-tools.js";
 import { gitStatusTool, gitDiffTool, gitLogTool, gitBranchTool, gitCommitTool } from "./git-tools.js";
 import { getAvailableTools } from "./tool-scope.js";
 import { TaskPlanTracker } from "./planning-tools.js";
+import { buildDependencyGraph, findDependencies, findDependents } from "@gameforge/project";
 
 export type ApprovalRequest = (call: ToolCall, reason: string) => Promise<boolean>;
 
@@ -104,6 +105,11 @@ export class ToolExecutor {
         const matches = await searchProjectTool(this.guard, String(args.query), args.maxResults as number | undefined);
         return JSON.stringify(matches);
       }
+      case "inspect_dependencies": {
+        const path = normalizeGraphPath(String(args.path));
+        const graph = await buildDependencyGraph(this.guard.root);
+        return JSON.stringify({ dependsOn: findDependencies(graph, path), dependedOnBy: findDependents(graph, path) });
+      }
       case "create_file":
         await createFileTool(this.guard, String(args.path), String(args.content ?? ""));
         return `Created ${args.path}`;
@@ -160,4 +166,9 @@ export class ToolExecutor {
   private errorResult(call: ToolCall, message: string): ToolResultMessage {
     return { role: "tool", toolCallId: call.id, name: call.name, content: message, isError: true };
   }
+}
+
+/** `buildDependencyGraph`'s entries are forward-slash, no-leading-"./" relative paths — normalize whatever form the model passed so a lookup isn't a silent miss just because of a leading "./" or backslashes. */
+function normalizeGraphPath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/^\.\//, "");
 }

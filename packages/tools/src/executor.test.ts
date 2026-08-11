@@ -340,4 +340,27 @@ describe("ToolExecutor", () => {
     await executor.execute({ id: "2", name: "set_requirements", arguments: { requirements: ["c"] } }, "ask");
     expect(executor.getTaskPlanTracker().snapshot().requirements.map((r) => r.description)).toEqual(["c"]);
   });
+
+  it("inspect_dependencies reports real dependents/dependencies from the actual file graph, always allowed even in ask mode", async () => {
+    const root = await mkdtemp(join(tmpdir(), "gf-exec-deps-"));
+    await writeFile(join(root, "main.ts"), `import { helper } from "./helper.js";\n`);
+    await writeFile(join(root, "helper.ts"), `export function helper() {}\n`);
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+
+    const result = await executor.execute({ id: "1", name: "inspect_dependencies", arguments: { path: "helper.ts" } }, "ask");
+
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(result.content)).toEqual({ dependsOn: [], dependedOnBy: ["main.ts"] });
+  });
+
+  it("inspect_dependencies normalizes a leading './' the model might pass", async () => {
+    const root = await mkdtemp(join(tmpdir(), "gf-exec-deps-"));
+    await writeFile(join(root, "main.ts"), `import { helper } from "./helper.js";\n`);
+    await writeFile(join(root, "helper.ts"), `export function helper() {}\n`);
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+
+    const result = await executor.execute({ id: "1", name: "inspect_dependencies", arguments: { path: "./main.ts" } }, "ask");
+
+    expect(JSON.parse(result.content)).toEqual({ dependsOn: ["helper.ts"], dependedOnBy: [] });
+  });
 });

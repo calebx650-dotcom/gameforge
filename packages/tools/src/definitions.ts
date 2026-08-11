@@ -35,6 +35,17 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: "inspect_dependencies",
+    description:
+      "Look up which project files a given file imports, and which files import it back, from a real file-level import graph — useful for 'what would break if I change this' or 'where is this actually used' without reading every file. TypeScript/JavaScript only (relative imports resolved on disk); returns empty results for other languages (e.g. C#, where 'using' names a namespace, not a file, so a real answer isn't available this way).",
+    category: "read",
+    parameters: {
+      type: "object",
+      properties: { path: { type: "string", description: "Path relative to the project root" } },
+      required: ["path"],
+    },
+  },
+  {
     name: "create_file",
     description: "Create a new file with the given content. Fails if the file already exists.",
     category: "write",

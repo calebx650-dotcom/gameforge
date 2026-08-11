@@ -13,6 +13,7 @@
     { "path": "../level-design" },
     { "path": "../combat-ai" },
     { "path": "../shader-synthesis" },
-    { "path": "../engine-bridge" }
+    { "path": "../engine-bridge" },
+    { "path": "../project" }
   ]
 }
