@@ -111,11 +111,36 @@ export class McpHttpClient {
     }
   }
 
-  private async request<T>(method: string, params: Record<string, unknown>): Promise<T> {
+  /**
+   * `retryAllowed` bounds recovery to a single attempt per call: a real MCP
+   * server responds 404 when the `Mcp-Session-Id` it was given is
+   * unrecognized (session expired, or the server restarted and forgot every
+   * session it had); a `fetch` rejection means the connection itself dropped
+   * (reset, server briefly down). Either way, the fix is the same — forget
+   * the stale session, re-run the `initialize` handshake, and replay this
+   * exact call once. If that retry *also* fails, the problem is real (server
+   * genuinely unreachable, or broken) and should surface as an error rather
+   * than loop.
+   */
+  private async request<T>(method: string, params: Record<string, unknown>, retryAllowed = true): Promise<T> {
     await this.ensureSession();
 
     const id = ++requestCounter;
-    const res = await this.post({ jsonrpc: "2.0", id, method, params });
+    let res: Response;
+    try {
+      res = await this.post({ jsonrpc: "2.0", id, method, params });
+    } catch (err) {
+      if (retryAllowed) {
+        this.forgetSession();
+        return this.request<T>(method, params, false);
+      }
+      throw err;
+    }
+
+    if (res.status === 404 && retryAllowed) {
+      this.forgetSession();
+      return this.request<T>(method, params, false);
+    }
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       throw new ProviderError(`MCP server returned ${res.status}: ${text}`, res.status >= 500);
@@ -128,6 +153,11 @@ export class McpHttpClient {
       throw new ProviderError(`MCP call "${method}" returned no result`);
     }
     return body.result;
+  }
+
+  private forgetSession(): void {
+    this.sessionId = undefined;
+    this.sessionPromise = undefined;
   }
 
   /**

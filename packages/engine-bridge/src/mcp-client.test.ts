@@ -148,6 +148,90 @@ describe("McpHttpClient", () => {
     await expect(client.listTools()).rejects.toThrow(/Failed to reach MCP server/);
   });
 
+  it("recovers from a stale session (real MCP servers 404 an unrecognized Mcp-Session-Id): re-initializes and replays the call once", async () => {
+    let initializeCount = 0;
+    let sawStaleSessionAttempt = false;
+    const sessionIds = ["stale-session", "fresh-session"];
+    globalThis.fetch = vi.fn(async (_url, init) => {
+      const body = JSON.parse((init as RequestInit).body as string);
+      const headers = (init as RequestInit).headers as Record<string, string>;
+      if (body.method === "initialize") {
+        const sid = sessionIds[initializeCount++];
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: {} }), {
+          status: 200,
+          headers: { "Mcp-Session-Id": sid, "Content-Type": "application/json" },
+        });
+      }
+      if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
+
+      if (headers["Mcp-Session-Id"] === "stale-session") {
+        sawStaleSessionAttempt = true;
+        return new Response(null, { status: 404 });
+      }
+      expect(headers["Mcp-Session-Id"]).toBe("fresh-session");
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: { tools: [] } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const client = new McpHttpClient({ baseUrl: "http://127.0.0.1:6400" });
+    const tools = await client.listTools();
+
+    expect(sawStaleSessionAttempt).toBe(true);
+    expect(initializeCount).toBe(2);
+    expect(tools).toEqual([]);
+  });
+
+  it("gives up after one retry if the session stays stale (doesn't loop forever)", async () => {
+    globalThis.fetch = vi.fn(async (_url, init) => {
+      const body = JSON.parse((init as RequestInit).body as string);
+      if (body.method === "initialize") {
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: {} }), {
+          status: 200,
+          headers: { "Mcp-Session-Id": "always-stale", "Content-Type": "application/json" },
+        });
+      }
+      if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
+      return new Response(null, { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const client = new McpHttpClient({ baseUrl: "http://127.0.0.1:6400" });
+    await expect(client.listTools()).rejects.toThrow(/404/);
+    // initialize should have been attempted exactly twice: the original session, then the one retry.
+    const initializeCalls = (globalThis.fetch as any).mock.calls.filter(
+      ([, init]: [unknown, RequestInit]) => JSON.parse(init.body as string).method === "initialize",
+    );
+    expect(initializeCalls).toHaveLength(2);
+  });
+
+  it("recovers from a connection drop mid-session (fetch rejects on a tool call, not just on initialize)", async () => {
+    let toolCallAttempts = 0;
+    globalThis.fetch = vi.fn(async (_url, init) => {
+      const body = JSON.parse((init as RequestInit).body as string);
+      if (body.method === "initialize") {
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: {} }), {
+          status: 200,
+          headers: { "Mcp-Session-Id": SESSION_ID, "Content-Type": "application/json" },
+        });
+      }
+      if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
+
+      toolCallAttempts++;
+      if (toolCallAttempts === 1) throw new Error("ECONNRESET");
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: { tools: [] } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const client = new McpHttpClient({ baseUrl: "http://127.0.0.1:6400" });
+    const tools = await client.listTools();
+
+    expect(toolCallAttempts).toBe(2);
+    expect(tools).toEqual([]);
+  });
+
   it("throws when initialize succeeds but omits the Mcp-Session-Id header", async () => {
     globalThis.fetch = vi.fn(async (_url, init) => {
       const body = JSON.parse((init as RequestInit).body as string);

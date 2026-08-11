@@ -121,6 +121,24 @@ via `uvx`), real project at `GameForgeUnityTest`, HTTP transport, port 8080.
   directly, polling included. Unit-tested against a fake server speaking
   this real two-call sequence; not yet exercised against a live Editor
   (the earlier `connect()`/`readConsole()` live session predates this fix).
+- **`McpHttpClient` had no recovery path if the MCP session dropped
+  mid-run** — found while scoping the P1 reliability tier (ROADMAP.md).
+  Per the MCP "Streamable HTTP" spec, a server responds `404` to a request
+  carrying an `Mcp-Session-Id` it no longer recognizes (the session
+  expired, or the server restarted); before this fix, that 404 — or a
+  plain connection drop mid-call — just failed the call outright, forcing
+  a whole new `UnityBridge`/`McpHttpClient` instance to recover. Now
+  `McpHttpClient.request()` treats both cases the same way: forget the
+  stale session, re-run `initialize` to get a fresh one, and replay the
+  exact same call once. Bounded to a single retry — a server that's
+  genuinely down still fails loudly instead of looping. Unit-tested with
+  three new cases in `mcp-client.test.ts`: a stale-session 404 that
+  recovers on retry, a connection that stays broken across the retry (and
+  correctly gives up rather than looping), and a `fetch` rejection
+  mid-tool-call (not just during `initialize`) that also recovers. Not
+  yet exercised against a real Unity Editor — there's no cheap way to
+  force a real `mcp-for-unity` session to expire on demand outside of
+  restarting the server mid-session, which hasn't been done live yet.
 - **Everything else in `UnityBridge`** (`inspectScene`, `createObject`,
   `modifyObject`/`modifyTransform`/`modifyComponent`, `saveScene`,
   `enterPlayMode`/`exitPlayMode`, `captureScreenshot`) is still unverified

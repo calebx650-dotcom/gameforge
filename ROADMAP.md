@@ -56,10 +56,13 @@ and the live Unity/Ollama session for the demo run itself).
       "Automatic repair"); general-purpose recovery for other tool
       failures is whatever `Agent.run()`'s normal error-message-back-to-
       the-model path provides, not a dedicated subsystem.
-- [ ] MCP recovery — **not built.** `McpHttpClient`/`UnityBridge` have no
-      reconnect/retry path if the MCP session drops mid-run (stale
-      `Mcp-Session-Id`, connection reset); a dropped session currently just
-      fails the next call.
+- [x] MCP recovery — `McpHttpClient.request()` now detects a stale session
+      (a real MCP server 404s an unrecognized `Mcp-Session-Id`) or a dropped
+      connection mid-call, forgets the session, re-runs `initialize`, and
+      replays the exact call once — bounded to a single retry so a
+      genuinely broken server still fails loudly. Unit-tested (3 new cases
+      in `mcp-client.test.ts`); not yet exercised against a real Unity
+      Editor's session actually expiring. See UNITY_BRIDGE.md.
 - [ ] Task cancellation — **partial, unverified.** `Agent.run()` accepts an
       `AbortSignal` and `apps/server` wires one up per chat connection, but
       it hasn't been confirmed that aborting mid-tool-call (especially an
@@ -160,8 +163,8 @@ and a local-first option behind the same interface:
 - [x] Security — `WorkspaceGuard` project-root sandboxing, mode-gated
       permissions, `costsMoney` gating on every vendor call. See
       SECURITY.md.
-- [ ] Reliability — see P1 above; the open items there (MCP recovery,
-      cancellation) block calling this done.
+- [ ] Reliability — see P1 above; the remaining open item there
+      (task cancellation, unverified) blocks calling this done.
 - [ ] Performance — not profiled or budgeted anywhere yet.
 - [ ] Logging — the operation log is in-memory per agent run only, not
       persisted to disk.
