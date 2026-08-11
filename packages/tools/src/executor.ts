@@ -86,6 +86,7 @@ export class ToolExecutor {
 
     try {
       const content = await this.dispatch(call, signal);
+      this.taskPlanTracker.recordToolCall(call.name);
       return { role: "tool", toolCallId: call.id, name: call.name, content };
     } catch (err) {
       return this.errorResult(call, (err as Error).message);

@@ -213,7 +213,10 @@ update_requirement_status for each requirement — "met" only if you actually ve
 checked the console), "unmet" if you've confirmed it's NOT satisfied, and leave it "pending" rather than guessing if
 you genuinely didn't check. A requirement marked "met" is a claim someone may rely on without re-checking your work
 themselves — treat it that way. Skip all of this for a genuinely trivial one-step request; it's not worth the
-overhead of tracking "read this one file."
+overhead of tracking "read this one file." Note: marking a requirement "met" is refused with an error if no
+read/build/test/console/play-mode tool call has happened since you created it — go actually check, then try again;
+this isn't a bug, it's catching exactly the "declared done without checking" mistake this whole system exists to
+prevent.
 Stay within the project workspace. Explain what you changed and why. Ask before doing anything destructive.`;
 
 /**

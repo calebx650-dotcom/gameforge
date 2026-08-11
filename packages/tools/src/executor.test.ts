@@ -313,8 +313,12 @@ describe("ToolExecutor", () => {
       { id: 2, description: "stamina bar is visible", status: "pending" },
     ]);
 
+    // The "met" guard (see the dedicated tests below) requires a real verification
+    // call since the requirement was created — read_file here stands in for that.
+    await executor.execute({ id: "3", name: "read_file", arguments: { path: "hello.txt" } }, "ask");
+
     const updateResult = await executor.execute(
-      { id: "3", name: "update_requirement_status", arguments: { id: 1, status: "met", note: "confirmed in play mode" } },
+      { id: "4", name: "update_requirement_status", arguments: { id: 1, status: "met", note: "confirmed in play mode" } },
       "ask",
     );
     expect(updateResult.isError).toBeFalsy();
@@ -331,6 +335,66 @@ describe("ToolExecutor", () => {
     const result = await executor.execute({ id: "1", name: "update_requirement_status", arguments: { id: 99, status: "met" } }, "ask");
     expect(result.isError).toBe(true);
     expect(result.content).toMatch(/No requirement with id 99/);
+  });
+
+  it("refuses to mark a requirement 'met' with zero verification tool calls since it was created (P2.5 guardrail)", async () => {
+    const root = await makeProject();
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+    await executor.execute({ id: "1", name: "set_requirements", arguments: { requirements: ["the file says hello"] } }, "ask");
+
+    const result = await executor.execute({ id: "2", name: "update_requirement_status", arguments: { id: 1, status: "met" } }, "ask");
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/without checking it first/);
+    expect(executor.getTaskPlanTracker().snapshot().requirements[0].status).toBe("pending");
+  });
+
+  it("allows marking 'met' once a real verification call has happened since the requirement was created", async () => {
+    const root = await makeProject();
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+    await executor.execute({ id: "1", name: "set_requirements", arguments: { requirements: ["the file says hello"] } }, "ask");
+    await executor.execute({ id: "2", name: "read_file", arguments: { path: "hello.txt" } }, "ask");
+
+    const result = await executor.execute({ id: "3", name: "update_requirement_status", arguments: { id: 1, status: "met" } }, "ask");
+
+    expect(result.isError).toBeFalsy();
+    expect(executor.getTaskPlanTracker().snapshot().requirements[0].status).toBe("met");
+  });
+
+  it("does NOT count a verification call made before the requirement was even created", async () => {
+    const root = await makeProject();
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+    // Verification happens first, requirement is created after — shouldn't retroactively count.
+    await executor.execute({ id: "1", name: "read_file", arguments: { path: "hello.txt" } }, "ask");
+    await executor.execute({ id: "2", name: "set_requirements", arguments: { requirements: ["the file says hello"] } }, "ask");
+
+    const result = await executor.execute({ id: "3", name: "update_requirement_status", arguments: { id: 1, status: "met" } }, "ask");
+
+    expect(result.isError).toBe(true);
+  });
+
+  it("never gates 'unmet' or 'pending' — only claiming something works is the risky direction", async () => {
+    const root = await makeProject();
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+    await executor.execute({ id: "1", name: "set_requirements", arguments: { requirements: ["stamina bar exists"] } }, "ask");
+
+    const unmetResult = await executor.execute({ id: "2", name: "update_requirement_status", arguments: { id: 1, status: "unmet" } }, "ask");
+    expect(unmetResult.isError).toBeFalsy();
+
+    const pendingResult = await executor.execute({ id: "3", name: "update_requirement_status", arguments: { id: 1, status: "pending" } }, "ask");
+    expect(pendingResult.isError).toBeFalsy();
+  });
+
+  it("does not count a failed tool call as verification", async () => {
+    const root = await makeProject();
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+    await executor.execute({ id: "1", name: "set_requirements", arguments: { requirements: ["a file that doesn't exist has content"] } }, "ask");
+    const failedRead = await executor.execute({ id: "2", name: "read_file", arguments: { path: "nonexistent.txt" } }, "ask");
+    expect(failedRead.isError).toBe(true);
+
+    const result = await executor.execute({ id: "3", name: "update_requirement_status", arguments: { id: 1, status: "met" } }, "ask");
+
+    expect(result.isError).toBe(true);
   });
 
   it("set_requirements replaces rather than appends on a second call", async () => {

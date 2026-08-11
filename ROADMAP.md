@@ -208,16 +208,20 @@ ordered candidate list and let it pick and fall back automatically.
       for an unknown requirement id) and at the `Agent.run()` level (a
       full set_plan → set_requirements → verify → update_requirement_status
       sequence ending up in the real result). This is deliberately a
-      recording/bookkeeping mechanism, not a trust mechanism — a
+      recording/bookkeeping mechanism, not a full trust mechanism — a
       requirement marked `"met"` is only as reliable as whatever the model
-      actually checked before saying so; nothing here independently
-      verifies that claim. That's what P2.5's still-open "requirement
-      verification" gap below would need to add.
+      actually checked before saying so, and nothing here confirms the
+      model checked the *right* thing. It does now block the *worst* case
+      of that gap — marking something met with zero verification at all —
+      see P2.5's "Requirement verification" entry below for the guard.
 
 ## P2.5 — Verification
 
-**Status: Partial** — the individual capabilities exist as tools; there's
-no unifying verification layer tying them to what was actually requested.
+**Status: Done** — every capability exists as a tool, and
+`update_requirement_status`'s verification-call guard (below) is the
+unifying layer tying "met" claims to something actually having been
+checked, even though it stops short of confirming the *right* thing was
+checked.
 
 - [x] Compile — `build_project`.
 - [x] Run — `enter_play_mode`/`exit_play_mode`.
@@ -240,14 +244,27 @@ no unifying verification layer tying them to what was actually requested.
       stops running, and both success/failure result shapes.
 - [x] Screenshot — `capture_screenshot`, spliced into the model's next turn.
 - [x] Console inspection — `read_console`.
-- [ ] Requirement verification — **still not built**, now that P2 gives it
-      something real to consume: `set_requirements`/`update_requirement_status`
-      (see P2 above) let the model *record* a checklist and *self-report*
-      each item's status, but nothing independently re-checks a `"met"`
-      claim the way, say, a second model call or a deterministic assertion
-      against `read_console`/`enter_play_mode` output could. Self-reported
-      status is real progress over nothing, but it's not the same
-      trust level as an independent check — that gap is still open.
+- [x] Requirement verification — a real structural guard, not a semantic
+      one, and the distinction is documented explicitly rather than
+      overclaimed: `TaskPlanTracker.updateRequirementStatus()`
+      (`packages/tools/src/planning-tools.ts`) now refuses to mark a
+      requirement `"met"` unless at least one verification-shaped tool call
+      (`read_file`, `read_console`, `run_tests`, `build_project`,
+      `enter_play_mode`, `git_diff`, etc. — a curated allowlist) happened
+      *since that requirement was created* — `ToolExecutor` reports every
+      successful dispatch to the tracker for this. This catches "declared
+      met with zero checking" for free, a real and common failure mode —
+      it does **not** confirm the model checked the *right* thing, only
+      that it checked *something*; a full independent re-check (a second
+      model call, or a deterministic assertion tied to the specific
+      requirement) is a different, harder problem this doesn't solve.
+      `"unmet"`/`"pending"` are never gated — claiming a problem or leaving
+      something unverified are never the risky direction. Unit-tested:
+      blocks a bare "met" with no prior verification, allows it once a
+      real verification call happened, correctly does *not* count a
+      verification call made *before* the requirement existed, never gates
+      `"unmet"`/`"pending"`, and doesn't count a *failed* tool call as
+      verification.
 
 ## P3 — Creation
 
