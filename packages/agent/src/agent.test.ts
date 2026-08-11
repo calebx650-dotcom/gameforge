@@ -107,6 +107,31 @@ describe("Agent", () => {
     expect(content).toBe("goodbye world\n");
     expect(result.log.some((e) => e.kind === "tool_call" && e.summary.includes("read_file"))).toBe(true);
     expect(result.log.some((e) => e.kind === "tool_result")).toBe(true);
+
+    // Real timing data (P4 performance instrumentation), not fabricated placeholders.
+    expect(result.timing.startedAt).toBeGreaterThan(0);
+    expect(result.timing.endedAt).toBeGreaterThanOrEqual(result.timing.startedAt);
+    expect(result.timing.wallClockMs).toBe(result.timing.endedAt - result.timing.startedAt);
+    expect(result.timing.perToolCall.read_file).toMatchObject({ callCount: 1, errorCount: 0 });
+    expect(result.timing.perToolCall.read_file.totalMs).toBeGreaterThanOrEqual(0);
+    expect(result.timing.perToolCall.edit_file).toMatchObject({ callCount: 1, errorCount: 0 });
+    expect(result.timing.perToolCall.run_command).toMatchObject({ callCount: 1, errorCount: 0 });
+  });
+
+  it("accumulates per-tool-call timing across multiple calls to the same tool, including error counts", async () => {
+    const root = await makeProject();
+    const executor = new ToolExecutor(new WorkspaceGuard(root), async () => true);
+    const provider = new ScriptedProvider([
+      { message: { role: "assistant", content: "" }, toolCalls: [{ id: "1", name: "read_file", arguments: { path: "hello.txt" } }] },
+      { message: { role: "assistant", content: "" }, toolCalls: [{ id: "2", name: "read_file", arguments: { path: "nonexistent.txt" } }] },
+      { message: { role: "assistant", content: "done" } },
+    ]);
+    const agent = new Agent({ provider, model: "m", systemPrompt: "sys", executor, mode: "build", maxIterations: 10 });
+
+    const result = await agent.run([{ role: "user", content: "read some files" }]);
+
+    expect(result.timing.perToolCall.read_file.callCount).toBe(2);
+    expect(result.timing.perToolCall.read_file.errorCount).toBe(1);
   });
 
   it("stops at max_iterations if the model never stops requesting tools", async () => {

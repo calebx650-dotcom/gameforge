@@ -382,7 +382,57 @@ and a local-first option behind the same interface:
       permissions, `costsMoney` gating on every vendor call. See
       SECURITY.md.
 - [x] Reliability — see P1 above, now Done.
-- [ ] Performance — not profiled or budgeted anywhere yet.
+- [x] Performance — not a profiler (a real one is a bigger, separate
+      undertaking this doesn't claim to be), but two real, concrete things
+      that didn't exist before: **real timing instrumentation**, and
+      **budgets already enforced in code, now cataloged in one place**.
+
+      `Agent.run()`'s result gains a `timing` field
+      (`packages/agent/src/agent.ts`) — real `startedAt`/`endedAt`/
+      `wallClockMs` for the whole run, and `perToolCall`, keyed by tool
+      name, accumulating real `callCount`/`totalMs`/`errorCount` across
+      every call to that tool in the run (so `totalMs / callCount` is a
+      real per-call average, not an estimate). This is wall-clock
+      measurement at points the loop already visits, not sampling
+      profiling — it tells you *which tool* was slow, not *why*.
+      Unit-tested: real positive timestamps, `wallClockMs` matching the
+      timestamp delta exactly, and per-tool stats accumulating correctly
+      across multiple calls to the same tool including a mix of success
+      and error.
+
+      Every numeric bound already enforced somewhere in this codebase,
+      gathered into one list rather than left scattered as implicit facts
+      only findable by reading source:
+      - `run_command`: 30s default timeout, 120s hard max
+        (`packages/tools/src/exec-tool.ts`).
+      - `Agent.run()`: 10 iterations default, 25 when an engine bridge is
+        configured (`apps/server/src/chat-socket.ts`); autonomous mode
+        additionally bounds wall-clock (30 min default) and file
+        modifications (50 default); 3 consecutive tool failures before
+        stopping (P1, above); `delegate_subtask` sub-agents get 5
+        iterations by default, 8 as a hard ceiling (P3.5, above).
+      - Generation vendor jobs (3D/PBR/rigging/motion/voice/music):
+        2-minute default poll timeout, 2s poll interval
+        (`packages/tools/src/generation-tools.ts`).
+      - `UnityBridge.runTests()`: 5-minute poll bound, 2s poll interval
+        (P2.5, above) — genuinely longer than the generation-job bound,
+        since a real test suite can legitimately take longer than a
+        generation API call.
+      - `McpHttpClient`: a single retry on a stale/dropped MCP session
+        (P1 MCP recovery, above) — no explicit request timeout beyond
+        that; relies on the underlying Node `fetch`/OS-level behavior.
+      - `GodotWsClient`: 10s default per-command timeout as a standalone
+        client; `GodotBridge` raises this to 5 minutes for the whole
+        client so `runTests()` isn't cut short by every other command's
+        much shorter budget (P2.5, above).
+
+      None of these numbers changed as part of this entry — this is
+      documentation of real existing behavior plus new real
+      instrumentation to observe it, not new tuning. Actual profiling
+      (where does wall-clock time really go under realistic load) needs a
+      live environment with a real Unity Editor/Ollama install this
+      sandbox doesn't have — see the live-verification caveats throughout
+      this document.
 - [ ] Logging — the operation log is in-memory per agent run only, not
       persisted to disk.
 - [ ] Installer — Tauri build verified on Linux only (Phase 5); macOS/

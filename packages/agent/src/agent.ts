@@ -75,6 +75,20 @@ export interface AgentRunResult {
    * trustworthy as whatever the model actually checked before setting it.
    */
   taskPlan: TaskPlanSnapshot;
+  /**
+   * Real observed timing for this run (P4 performance tier) — not a
+   * profiler, just wall-clock facts already available at the points the
+   * loop already visits, so a caller can actually see where a slow run
+   * went slow instead of guessing. `perToolCall` is keyed by tool name;
+   * `totalMs` sums every call to that tool this run, so `totalMs /
+   * callCount` is the real per-call average.
+   */
+  timing: {
+    startedAt: number;
+    endedAt: number;
+    wallClockMs: number;
+    perToolCall: Record<string, { callCount: number; totalMs: number; errorCount: number }>;
+  };
 }
 
 const DEFAULT_MAX_ITERATIONS = 10;
@@ -94,6 +108,8 @@ export class Agent {
   private readonly log: OperationLogEntry[] = [];
   private fileModificationCount = 0;
   private consecutiveToolFailures = 0;
+  private readonly perToolCall: Record<string, { callCount: number; totalMs: number; errorCount: number }> = {};
+  private startedAt = 0;
 
   constructor(private readonly options: AgentOptions) {}
 
@@ -104,6 +120,7 @@ export class Agent {
     ];
     const maxIterations = this.options.maxIterations ?? DEFAULT_MAX_ITERATIONS;
     const startedAt = Date.now();
+    this.startedAt = startedAt;
 
     for (let iteration = 1; iteration <= maxIterations; iteration++) {
       if (this.options.signal?.aborted) {
@@ -170,21 +187,29 @@ export class Agent {
   }
 
   private buildResult(messages: ChatMessage[], iterations: number, stoppedReason: AgentRunResult["stoppedReason"]): AgentRunResult {
+    const endedAt = Date.now();
     return {
       messages,
       log: this.log,
       iterations,
       stoppedReason,
       taskPlan: this.options.executor.getTaskPlanTracker().snapshot(),
+      timing: { startedAt: this.startedAt, endedAt, wallClockMs: endedAt - this.startedAt, perToolCall: this.perToolCall },
     };
   }
 
   private async executeAndRecord(call: ToolCall, messages: ChatMessage[]): Promise<void> {
     this.record({ timestamp: Date.now(), kind: "tool_call", summary: `${call.name}(${summarizeArgs(call)})`, detail: call });
+    const callStartedAt = Date.now();
     const toolResult =
       call.name === "delegate_subtask"
         ? await this.runDelegatedSubtask(call)
         : await this.options.executor.execute(call, this.options.mode, this.options.signal);
+    const callDurationMs = Date.now() - callStartedAt;
+    const stats = (this.perToolCall[call.name] ??= { callCount: 0, totalMs: 0, errorCount: 0 });
+    stats.callCount++;
+    stats.totalMs += callDurationMs;
+    if (toolResult.isError) stats.errorCount++;
     messages.push(toolResult);
     this.record({
       timestamp: Date.now(),
