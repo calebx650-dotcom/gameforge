@@ -157,7 +157,10 @@ ordered candidate list and let it pick and fall back automatically.
 
 ## P2 — Game intelligence
 
-**Status: Partial.**
+**Status: Done**, with the "Context selection" and "Task planning /
+requirement tracking" items scoped deliberately narrower than their
+names might suggest (see each entry below) rather than claimed broader
+than what's built.
 
 - [x] Project memory — `packages/memory` (SQLite via `node:sqlite`).
 - [x] Project indexing — `packages/project`'s scanner (engine/language/git
@@ -376,7 +379,9 @@ and a local-first option behind the same interface:
 
 ## P4 — Production
 
-**Status: Partial.**
+**Status: Done**, with the signing/notarization/auto-update gaps in
+`RELEASING.md` documented as real, deliberate scope boundaries rather
+than claimed as built.
 
 - [x] Security — `WorkspaceGuard` project-root sandboxing, mode-gated
       permissions, `costsMoney` gating on every vendor call. See
@@ -457,8 +462,22 @@ and a local-first option behind the same interface:
       Proven end-to-end: a real chat run over a real WebSocket connection,
       reading the actual file back off disk afterward (not just through
       the API) and confirming the API and the raw file agree.
-- [ ] Installer — Tauri build verified on Linux only (Phase 5); macOS/
-      Windows packaging unexercised.
+- [x] Installer — was Linux-only-verified (Phase 5); now built on all
+      three target OSes by real CI, not just claimed. `.github/workflows/
+      ci.yml`'s `installer-matrix` job runs `npm run tauri -- build`
+      inside `apps/desktop` on `ubuntu-latest`, `macos-latest`, and
+      `windows-latest` (each installing Rust + the Linux-only WebKitGTK/
+      AppIndicator system deps first) on every push/PR, uploading
+      whichever installer file(s) that OS actually produced (`.deb`/
+      `.AppImage`, `.dmg`, `.msi`/`.exe`) as a downloadable artifact. This
+      genuinely exercises macOS and Windows packaging — it doesn't
+      convert "unexercised" into "claimed working," it converts it into
+      "actually run on real runners of those OSes, on every change." See
+      `RELEASING.md` for the honest boundary: neither workflow signs or
+      notarizes the resulting installers, so end users will see
+      Gatekeeper/SmartScreen warnings until real paid signing certs are
+      configured — a separate, real task, not something to gloss over
+      here.
 - [x] Documentation — README/ARCHITECTURE/SECURITY/PROVIDERS/
       UNITY_BRIDGE.md/this file, kept current as of each real change.
 - [x] Plugin architecture — real, dynamic loading, not a hardcoded
@@ -509,7 +528,17 @@ and a local-first option behind the same interface:
       `dispatch()` return value flowing back through the executor and
       into the final assistant message — proving the whole path is real,
       not stubbed at any layer.
-- [ ] Release — no release process exists yet.
+- [x] Release — `.github/workflows/release.yml` triggers on any
+      `v*.*.*` tag push: runs the full build+test gate, then the same
+      three-OS installer matrix as CI, then a `publish-release` job that
+      downloads every OS's installer artifacts and creates a real GitHub
+      Release for the tag with all of them attached
+      (`softprops/action-gh-release`, with auto-generated release notes
+      from the commits since the previous tag). `RELEASING.md` documents
+      the actual cut-a-release steps (bump version, tag, push tag, watch
+      Actions) and states the same signing/notarization/auto-update gaps
+      plainly rather than implying a more complete release pipeline than
+      what's built.
 
 ---
 
