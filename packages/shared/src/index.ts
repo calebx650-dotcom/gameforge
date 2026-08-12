@@ -22,6 +22,15 @@ export interface ToolCall {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
+  /**
+   * Opaque, vendor-specific data a provider attached to this tool call that must be echoed
+   * back verbatim on the next request for multi-turn tool calling to keep working — e.g.
+   * Gemini's OpenAI-compatible endpoint rejects a follow-up turn with a 400 if the assistant
+   * tool-call message doesn't repeat the `extra_content.google.thought_signature` it returned
+   * (confirmed live 2026-08-11). Providers that don't need this simply never set it; everything
+   * outside the provider that produced it treats it as inert passthrough.
+   */
+  providerData?: unknown;
 }
 
 export interface ToolResultMessage {

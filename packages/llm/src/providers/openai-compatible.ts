@@ -64,7 +64,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
-    const pendingToolCalls: Record<number, { id: string; name: string; arguments: string }> = {};
+    const pendingToolCalls: Record<number, { id: string; name: string; arguments: string; extraContent?: unknown }> = {};
 
     while (true) {
       const { value, done } = await reader.read();
@@ -81,7 +81,13 @@ export class OpenAICompatibleProvider implements LLMProvider {
           continue;
         }
         const chunk = JSON.parse(payload) as {
-          choices: Array<{ delta: { content?: string; tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }> }; finish_reason?: string | null }>;
+          choices: Array<{
+            delta: {
+              content?: string;
+              tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string }; extra_content?: unknown }>;
+            };
+            finish_reason?: string | null;
+          }>;
         };
         const delta = chunk.choices[0]?.delta;
         if (delta?.tool_calls) {
@@ -89,30 +95,45 @@ export class OpenAICompatibleProvider implements LLMProvider {
             const existing = pendingToolCalls[tc.index] ?? { id: tc.id ?? `${tc.index}`, name: "", arguments: "" };
             if (tc.function?.name) existing.name = tc.function.name;
             if (tc.function?.arguments) existing.arguments += tc.function.arguments;
+            if (tc.extra_content !== undefined) existing.extraContent = tc.extra_content;
             pendingToolCalls[tc.index] = existing;
           }
         }
         const finished = chunk.choices[0]?.finish_reason;
+        const hasPendingToolCalls = Object.keys(pendingToolCalls).length > 0;
         yield {
           textDelta: delta?.content || undefined,
-          toolCalls: finished === "tool_calls" ? this.finalizeToolCalls(pendingToolCalls) : undefined,
+          // Vendors disagree on what finish_reason accompanies a tool call: OpenAI/OpenRouter
+          // send "tool_calls", but Gemini's OpenAI-compatible endpoint sends "stop" even when
+          // the response was purely tool calls (confirmed live against a real Gemini API key,
+          // 2026-08-11) — gating strictly on "tool_calls" silently dropped every accumulated
+          // tool call for Gemini, since generate() has no such gate and worked fine; only
+          // stream() had this bug. Finalizing on any terminal chunk that has accumulated tool
+          // call deltas covers both vendors' conventions.
+          toolCalls: finished != null && hasPendingToolCalls ? this.finalizeToolCalls(pendingToolCalls) : undefined,
           done: finished != null,
         };
       }
     }
   }
 
-  private finalizeToolCalls(pending: Record<number, { id: string; name: string; arguments: string }>): ToolCall[] {
+  private finalizeToolCalls(pending: Record<number, { id: string; name: string; arguments: string; extraContent?: unknown }>): ToolCall[] {
     return Object.values(pending).map((tc) => ({
       id: tc.id,
       name: tc.name,
       arguments: safeParseJson(tc.arguments),
+      ...(tc.extraContent !== undefined ? { providerData: tc.extraContent } : {}),
     }));
   }
 
   private extractToolCalls(raw?: OpenAIToolCall[]): ToolCall[] {
     if (!raw) return [];
-    return raw.map((tc) => ({ id: tc.id, name: tc.function.name, arguments: safeParseJson(tc.function.arguments) }));
+    return raw.map((tc) => ({
+      id: tc.id,
+      name: tc.function.name,
+      arguments: safeParseJson(tc.function.arguments),
+      ...(tc.extra_content !== undefined ? { providerData: tc.extra_content } : {}),
+    }));
   }
 
   private buildBody(options: GenerateOptions, stream: boolean) {
@@ -155,6 +176,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
 interface OpenAIToolCall {
   id: string;
   function: { name: string; arguments: string };
+  extra_content?: unknown;
 }
 
 function toOpenAIMessage(m: ChatMessage) {
@@ -170,6 +192,12 @@ function toOpenAIMessage(m: ChatMessage) {
             id: tc.id,
             type: "function",
             function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+            // Echoed back verbatim when present — see ToolCall.providerData's doc comment
+            // (@gameforge/shared) for why: Gemini's OpenAI-compatible endpoint 400s a
+            // multi-turn tool-calling request that omits the thought_signature it originally
+            // attached to this same tool call. A no-op for vendors (OpenAI, OpenRouter) that
+            // never set providerData in the first place.
+            ...(tc.providerData !== undefined ? { extra_content: tc.providerData } : {}),
           })),
         }
       : {}),
