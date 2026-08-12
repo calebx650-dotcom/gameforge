@@ -3,9 +3,10 @@ import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mkdtemp, mkdir, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { execFile } from "node:child_process";
+import { join, dirname } from "node:path";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import request from "supertest";
 import WebSocket from "ws";
 import { createServer } from "node:http";
@@ -16,6 +17,58 @@ import { ProjectManager } from "./project-manager.js";
 import { createRouter } from "./routes.js";
 import { handleChatConnection } from "./chat-socket.js";
 import { isFfmpegAvailable } from "@gameforge/vision";
+
+/**
+ * Spawns `apps/server` as a genuinely separate `node` process (via `tsx`, the same way
+ * `npm run dev:server` runs it), rather than importing and running `createServer()`/
+ * `handleChatConnection()` in-process the way the rest of this suite's shared `gfServer`
+ * does. Needed specifically for anything that exercises `loadPlugins()` (P4 plugin
+ * architecture): confirmed live 2026-08-12, Vitest's SSR execution context (`vite-node`)
+ * has no working dynamic `import()` at all for a file outside its own module graph — proven
+ * by testing every specifier-level workaround (an indirected `new Function`-wrapped import,
+ * a `data:` URL import needing no file resolution at all, the `/* @vite-ignore *\/` pragma)
+ * and getting the identical failure every time, which rules out a resolver quirk and points
+ * at the execution realm itself lacking `importModuleDynamically` outside Vite's own
+ * rewritten import helper. A real `node` process — which is what GameForge's server actually
+ * runs as in production — has no such limitation, so this is what actually proves plugin
+ * loading works, the same way the rest of this suite proves the real chat/tool-call pipeline
+ * works: by driving the real running server over its real HTTP/WS ports, not an in-process
+ * stand-in.
+ */
+async function spawnRealServerSubprocess(): Promise<{ port: number; httpBase: string; wsBase: string; stop: () => Promise<void> }> {
+  const indexTsPath = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
+  const tsxCliPath = fileURLToPath(new URL("../../../node_modules/tsx/dist/cli.mjs", import.meta.url));
+  const proc: ChildProcess = spawn(process.execPath, [tsxCliPath, indexTsPath], {
+    env: { ...process.env, GAMEFORGE_SERVER_PORT: "0" },
+  });
+
+  const port = await new Promise<number>((resolve, reject) => {
+    let buf = "";
+    const onData = (chunk: Buffer) => {
+      buf += chunk.toString();
+      const match = buf.match(/listening on http:\/\/localhost:(\d+)/);
+      if (match) {
+        proc.stdout?.off("data", onData);
+        resolve(Number(match[1]));
+      }
+    };
+    proc.stdout?.on("data", onData);
+    proc.once("error", reject);
+    proc.once("exit", (code) => reject(new Error(`server subprocess exited early (code ${code}) before it reported a port`)));
+    setTimeout(() => reject(new Error("server subprocess never reported a listening port within 10s")), 10_000);
+  });
+
+  return {
+    port,
+    httpBase: `http://localhost:${port}`,
+    wsBase: `ws://localhost:${port}`,
+    stop: () =>
+      new Promise<void>((resolve) => {
+        proc.once("exit", () => resolve());
+        proc.kill();
+      }),
+  };
+}
 
 /**
  * End-to-end smoke test for the Phase 1 vertical slice described in the
@@ -844,7 +897,11 @@ describe("GameForge end-to-end smoke test", () => {
   });
 
   it("loads a real plugin file from .gameforge/plugins and dispatches to it through a live chat request (P4 plugin architecture)", async () => {
-    const httpBase = `http://localhost:${gfPort}`;
+    // Not the shared in-process gfServer the rest of this suite uses — see
+    // spawnRealServerSubprocess's doc comment for why loadPlugins() specifically needs a
+    // genuinely separate node process to import the plugin file for real.
+    const realServer = await spawnRealServerSubprocess();
+    const { httpBase } = realServer;
 
     const pluginProjectRoot = await mkdtemp(join(tmpdir(), "gf-e2e-plugin-"));
     const pluginsDir = join(pluginProjectRoot, ".gameforge", "plugins");
@@ -896,7 +953,7 @@ describe("GameForge end-to-end smoke test", () => {
       const projectId = openRes.body.id;
 
       const result = await new Promise<{ finalText: string; toolResultContent: string | undefined }>((resolve, reject) => {
-        const ws = new WebSocket(`ws://localhost:${gfPort}/ws/chat`);
+        const ws = new WebSocket(`${realServer.wsBase}/ws/chat`);
         const timeout = setTimeout(() => reject(new Error("plugin e2e timed out")), 10_000);
 
         ws.on("open", () => {
@@ -932,8 +989,9 @@ describe("GameForge end-to-end smoke test", () => {
       expect(result.finalText).toContain("4");
     } finally {
       await new Promise((resolve) => fakePluginModel.close(resolve));
+      await realServer.stop();
     }
-  });
+  }, 30_000);
 
   it("splices real frames from a reference video when ffmpeg is available, and degrades gracefully with a clear log entry when it isn't (P3 video reference input)", async () => {
     const httpBase = `http://localhost:${gfPort}`;

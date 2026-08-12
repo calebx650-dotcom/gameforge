@@ -29,7 +29,13 @@ export function startServer(port = PORT) {
   wss.on("connection", (socket) => handleChatConnection(socket, projects));
 
   httpServer.listen(port, () => {
-    console.log(`GameForge server listening on http://localhost:${port}`);
+    // Log the OS-assigned port from the actual bound address, not the `port` parameter —
+    // when `port` is 0 (ask the OS for any free port, e.g. GAMEFORGE_SERVER_PORT=0 for a
+    // test spawning its own throwaway server instance), the parameter itself is always 0;
+    // only `httpServer.address()` after listen's callback fires knows the real port.
+    const address = httpServer.address();
+    const boundPort = typeof address === "object" && address ? address.port : port;
+    console.log(`GameForge server listening on http://localhost:${boundPort}`);
   });
 
   return httpServer;
