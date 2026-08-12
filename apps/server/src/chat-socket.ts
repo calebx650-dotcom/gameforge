@@ -356,7 +356,17 @@ export function handleChatConnection(socket: WebSocket, projects: ProjectManager
     }
 
     if (parsed.type === "chat") {
-      await runChat(parsed);
+      // Confirmed live 2026-08-10: an unhandled error here (e.g. maybeCreateCheckpoint
+      // throwing on a real git failure) is an unhandled promise rejection from this
+      // WebSocket "message" listener — Node doesn't route that to any try/catch, and
+      // crashed the *entire* server process, killing every connected client's session,
+      // not just this one request. A single bad tool call shouldn't take the whole
+      // server down.
+      try {
+        await runChat(parsed);
+      } catch (err) {
+        send(socket, { type: "error", message: `Chat run failed: ${(err as Error).message}` });
+      }
     }
   });
 

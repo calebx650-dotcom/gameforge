@@ -1,5 +1,5 @@
 import { readdir, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -85,7 +85,13 @@ async function walkForFacts(
   for (const entry of entries) {
     if (IGNORED_DIRS.has(entry.name)) continue;
     const full = join(dir, entry.name);
-    const relPath = full.slice(root.length + 1);
+    // Always forward-slash, even on Windows: Unity's own asset paths are forward-slash
+    // (e.g. unity-mcp reports "scenePath": "Assets/Scenes/SampleScene.unity" — confirmed
+    // live 2026-08-10), and these paths get shown directly to the LLM in the project
+    // context / passed back to engine tools that expect that convention, so a
+    // Windows-native backslash path here (what `join()` produces) is both visually
+    // inconsistent and a real mismatch against what a Unity-facing caller expects.
+    const relPath = full.slice(root.length + 1).split(sep).join("/");
     if (entry.isDirectory()) {
       await walkForFacts(root, full, languages, packageFiles, sceneFiles, docFiles, depth + 1);
     } else {

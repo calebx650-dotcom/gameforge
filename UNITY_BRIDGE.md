@@ -165,15 +165,70 @@ via `uvx`), real project at `GameForgeUnityTest`, HTTP transport, port 8080.
   this real two-tool sequence, including multi-poll-before-settling (fake
   timers) and the bounded-timeout case; not yet exercised against a live
   Editor.
-- **Everything else in `UnityBridge`** (`inspectScene`, `createObject`,
-  `modifyObject`/`modifyTransform`/`modifyComponent`, `saveScene`,
-  `enterPlayMode`/`exitPlayMode`, `captureScreenshot`) is still unverified
-  against a real Editor — only the transport-level fix (which applies to
-  every call) and `readConsole()`'s response-shape fix were exercised
-  live. If any of those tools' argument/response shapes are also wrong,
-  the "Real HTTP transport" section above shows the working pattern (call
-  the real tool over curl, compare against what the code assumes) for
-  finding out.
+- **Everything else in `UnityBridge` was exercised live for the first time
+  on 2026-08-10**, ahead of running the Working Demo Sprint's stamina-system
+  prompt end to end — and several had real bugs, all fixed and now covered
+  by `unity-bridge.test.ts` (21 tests) plus `scripts/verify-bridge-full.mjs`
+  (a live smoke test exercising every method against a real Editor):
+  - **Every `unity-mcp` tool response wraps its payload in
+    `{success, message, error, data, hint}`**, not the flat shape most
+    methods here assumed. `inspectScene()` read `data.name`/`data.objects`
+    directly; the real `get_hierarchy` response has no top-level `name` at
+    all and puts objects at `data.items` (fields `path`/`name`/`activeSelf`,
+    not `objects/name/active`) — fixed by also calling `get_active` for the
+    scene name. `createObject()` returned the raw envelope instead of
+    `envelope.data`.
+  - **`manage_gameobject` has no `"get"` action** (real enum: `create`/
+    `modify`/`delete`/`duplicate`/`move_relative`/`look_at`) — `inspectObject()`
+    called it anyway. Per-object detail is actually an MCP *resource*
+    (`mcpforunity://scene/gameobject/{id}` and `.../components`), reached via
+    a new `McpHttpClient.readResource()` (`resources/read`, a distinct MCP
+    capability from `tools/call`); the id comes from `find_gameobjects`
+    (`search_method: "by_name"`, and `include_inactive: true` — it's
+    active-only by default).
+  - **`manage_gameobject`'s `modify` action renames via `new_name` and
+    toggles activity via `set_active`** — `modifyObject()` passed `name`/
+    `active`, fields the real tool silently ignores (confirmed live: no
+    error, no effect — a real silent-failure bug, not just a crash).
+  - **There is no `set_component_property` action on `manage_gameobject`.**
+    Component properties are a separate tool, `manage_components`
+    (`action: "set_property"`) — `modifyComponent()` called the wrong tool
+    entirely.
+  - **There is no `capture_screenshot` tool at all** in the real 48-tool
+    list. The real capability is `manage_camera`'s `screenshot` action
+    (`include_image: true`), which returns *two* content blocks — a `text`
+    block with the usual envelope (`data.imageWidth`/`imageHeight`) and an
+    `image` block whose base64 payload is in a `data` field, not `text`
+    (added to `McpContentBlock`).
+  - **`create_object`'s own tool description tells the calling LLM to pass
+    `primitive: "empty"` for a mesh-less object**, but the real
+    `primitive_type` field rejects that literal string (`"Invalid primitive
+    type: 'empty'. Valid types: Sphere, Capsule, Cylinder, Cube, Plane,
+    Quad"`) — an empty GameObject is created by omitting `primitive_type`
+    entirely. Fixed at the bridge layer (translate `"empty"`/absent to
+    `undefined`) rather than trying to get every calling LLM to know this.
+  - **Every mutating call used to discard its result** (`await
+    this.client.callTool(...)` with no return-value check), so a real
+    failure (bad target, bad argument) would silently no-op instead of
+    throwing. All calls now go through a shared `unwrap()` that throws a
+    `ProviderError` on `success: false`.
+  - **A real, reproducible transient failure mode**: the Unity-side
+    WebSocket session between mcp-for-unity's Python HTTP server and the
+    Editor intermittently drops mid-call — reproduced live on `read_console`,
+    `find_gameobjects`, and `manage_gameobject` `delete` (`"Unity session not
+    ready ... (ping not answered); please retry"` /
+    `"Unity plugin session ... disconnected while awaiting command_result"`),
+    hitting ~2 of 3 back-to-back live calls in one observed run. Before the
+    `success` check existed, this crashed `readConsole()` with a raw
+    `TypeError: Cannot read properties of null (reading 'map')` instead of a
+    catchable error. The server marks these failures `"hint": "retry"` — a
+    real, self-describing signal, not something inferred from message text —
+    so `UnityBridge` now retries (bounded, 3 attempts, short backoff) any
+    call whose envelope carries that hint, and only that hint; a `success:
+    false` without it (not-found, bad argument, a real compile error)
+    surfaces immediately. Five back-to-back live `buildProject()` calls that
+    failed transiently roughly 2/3 of the time before this fix succeeded 5/5
+    after it.
 - Getting a Unity-side bridge *session* connected (not just the HTTP server
   reachable) turned out to be its own small yak-shave: `unity-mcp`'s "Start
   Server" UI button both starts the local HTTP server process *and* connects

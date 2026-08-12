@@ -6,10 +6,18 @@ const SESSION_ID = "test-session-id";
 /**
  * Stands in for a real MCP "Streamable HTTP" server (see mcp-client.test.ts for the
  * protocol details this mirrors): handles the `initialize`/`notifications/initialized`
- * handshake McpHttpClient now performs before every real request, then dispatches to
- * `handler` for the actual tool call.
+ * handshake McpHttpClient now performs before every real request, then dispatches
+ * `tools/call` to `handleTool` and `resources/read` to `handleResource`.
+ *
+ * `handleTool`/`handleResource` return the *payload* (the `{success, data, ...}`
+ * envelope every real unity-mcp response carries — confirmed live 2026-08-09/10, see
+ * unity-bridge.ts's module doc comment) already stringified isn't required — pass the
+ * envelope object directly and it's JSON.stringify'd into the text content block.
  */
-function mockMcpResponse(handler: (body: any) => unknown) {
+function mockMcpServer(opts: {
+  handleTool?: (name: string, args: any) => { content: Array<{ type: string; text?: string; data?: string }> };
+  handleResource?: (uri: string) => { text: string };
+}) {
   globalThis.fetch = vi.fn(async (_url, init) => {
     const body = JSON.parse((init as RequestInit).body as string);
     if (body.method === "initialize") {
@@ -21,11 +29,26 @@ function mockMcpResponse(handler: (body: any) => unknown) {
     if (body.method === "notifications/initialized") {
       return new Response(null, { status: 202 });
     }
-    return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: handler(body) }), {
+    let result: unknown;
+    if (body.method === "tools/call") {
+      if (!opts.handleTool) throw new Error(`unexpected tool call in test: ${body.params.name}`);
+      result = opts.handleTool(body.params.name, body.params.arguments);
+    } else if (body.method === "resources/read") {
+      if (!opts.handleResource) throw new Error(`unexpected resource read in test: ${body.params.uri}`);
+      result = { contents: [{ uri: body.params.uri, ...opts.handleResource(body.params.uri) }] };
+    } else {
+      throw new Error(`unexpected method in test: ${body.method}`);
+    }
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
   }) as unknown as typeof fetch;
+}
+
+/** Wraps a payload in the real `{success, message, error, data, hint}` tool-response envelope as a text content block. */
+function textEnvelope(data: unknown, success = true, error: string | null = null, hint: string | null = null) {
+  return { content: [{ type: "text", text: JSON.stringify({ success, message: null, error, data, hint }) }] };
 }
 
 describe("UnityBridge", () => {
@@ -35,54 +58,182 @@ describe("UnityBridge", () => {
   });
 
   it("connects by listing tools", async () => {
-    mockMcpResponse(() => ({ tools: [{ name: "manage_scene" }] }));
+    mockMcpServer({ handleTool: () => ({ content: [] }) });
+    globalThis.fetch = vi.fn(async (_url, init) => {
+      const body = JSON.parse((init as RequestInit).body as string);
+      if (body.method === "initialize") {
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: {} }), {
+          status: 200,
+          headers: { "Mcp-Session-Id": SESSION_ID, "Content-Type": "application/json" },
+        });
+      }
+      if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: { tools: [{ name: "manage_scene" }] } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
     const bridge = new UnityBridge();
     expect(bridge.isConnected()).toBe(false);
     await bridge.connect();
     expect(bridge.isConnected()).toBe(true);
   });
 
-  it("inspects the scene via manage_scene get_hierarchy", async () => {
-    let capturedArgs: any;
-    mockMcpResponse((body) => {
-      capturedArgs = body.params.arguments;
-      return { content: [{ type: "text", text: JSON.stringify({ name: "MainScene", objects: [{ path: "/Player", name: "Player", active: true }] }) }] };
+  it("inspects the scene via manage_scene get_hierarchy + get_active, unwrapping the real {data:{items:[...]}} envelope", async () => {
+    const capturedActions: string[] = [];
+    mockMcpServer({
+      handleTool: (name, args) => {
+        capturedActions.push(args.action);
+        if (args.action === "get_hierarchy") {
+          return textEnvelope({ items: [{ path: "Player", name: "Player", activeSelf: true }] });
+        }
+        return textEnvelope({ name: "MainScene" });
+      },
     });
     const bridge = new UnityBridge();
     const scene = await bridge.inspectScene();
-    expect(capturedArgs).toEqual({ action: "get_hierarchy" });
+    expect(capturedActions.sort()).toEqual(["get_active", "get_hierarchy"]);
     expect(scene.name).toBe("MainScene");
-    expect(scene.objects[0].path).toBe("/Player");
+    expect(scene.objects).toEqual([{ path: "Player", name: "Player", active: true }]);
   });
 
-  it("creates an object via manage_gameobject create", async () => {
+  it("inspects an object by resolving its instance ID via find_gameobjects, then reading the gameobject + components resources", async () => {
+    let findArgs: any;
+    mockMcpServer({
+      handleTool: (name, args) => {
+        expect(name).toBe("find_gameobjects");
+        findArgs = args;
+        return textEnvelope({ instanceIDs: [42] });
+      },
+      handleResource: (uri) => {
+        if (uri === "mcpforunity://scene/gameobject/42") {
+          return {
+            text: JSON.stringify({
+              success: true,
+              data: {
+                name: "Player",
+                path: "Player",
+                active: true,
+                transform: { position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+              },
+            }),
+          };
+        }
+        return {
+          text: JSON.stringify({
+            success: true,
+            data: { components: [{ typeName: "Transform", instanceID: 1, position: { x: 0, y: 0, z: 0 } }] },
+          }),
+        };
+      },
+    });
+    const bridge = new UnityBridge();
+    const detail = await bridge.inspectObject("Player");
+    expect(findArgs).toMatchObject({ search_term: "Player", search_method: "by_name", include_inactive: true });
+    expect(detail.name).toBe("Player");
+    expect(detail.components).toEqual([{ type: "Transform", properties: { position: { x: 0, y: 0, z: 0 } } }]);
+  });
+
+  it("throws a clear error when inspectObject finds no matching GameObject", async () => {
+    mockMcpServer({ handleTool: () => textEnvelope({ instanceIDs: [] }) });
+    const bridge = new UnityBridge();
+    await expect(bridge.inspectObject("Nope")).rejects.toThrow(/No GameObject found matching "Nope"/);
+  });
+
+  it("creates an object via manage_gameobject create, unwrapping the real envelope", async () => {
     let capturedArgs: any;
-    mockMcpResponse((body) => {
-      capturedArgs = body.params.arguments;
-      return { content: [{ type: "text", text: JSON.stringify({ path: "/Cube", name: "Cube", active: true }) }] };
+    mockMcpServer({
+      handleTool: (name, args) => {
+        capturedArgs = args;
+        return textEnvelope({ name: "Cube", activeSelf: true });
+      },
     });
     const bridge = new UnityBridge();
     const result = await bridge.createObject({ name: "Cube", primitive: "cube" });
     expect(capturedArgs).toMatchObject({ action: "create", name: "Cube", primitive_type: "cube" });
-    expect(result.path).toBe("/Cube");
+    expect(result).toEqual({ path: "Cube", name: "Cube", active: true });
+  });
+
+  it('creates an empty object by omitting primitive_type, since the real tool rejects primitive_type: "empty"', async () => {
+    let capturedArgs: any;
+    mockMcpServer({
+      handleTool: (name, args) => {
+        capturedArgs = args;
+        return textEnvelope({ name: "Empty", activeSelf: true });
+      },
+    });
+    const bridge = new UnityBridge();
+    await bridge.createObject({ name: "Empty", primitive: "empty" });
+    expect(capturedArgs.primitive_type).toBeUndefined();
+  });
+
+  it("nests the returned path under parentPath when creating a child object", async () => {
+    mockMcpServer({ handleTool: () => textEnvelope({ name: "Child", activeSelf: true }) });
+    const bridge = new UnityBridge();
+    const result = await bridge.createObject({ name: "Child", parentPath: "Parent" });
+    expect(result.path).toBe("Parent/Child");
+  });
+
+  it("modifies an object using the real new_name/set_active fields, not name/active", async () => {
+    let capturedArgs: any;
+    mockMcpServer({
+      handleTool: (name, args) => {
+        capturedArgs = args;
+        return textEnvelope({ name: "Renamed" });
+      },
+    });
+    const bridge = new UnityBridge();
+    await bridge.modifyObject("Player", { name: "Renamed", active: false });
+    expect(capturedArgs).toMatchObject({ action: "modify", target: "Player", new_name: "Renamed", set_active: false });
   });
 
   it("modifies a transform via manage_gameobject modify", async () => {
     let capturedArgs: any;
-    mockMcpResponse((body) => {
-      capturedArgs = body.params.arguments;
-      return { content: [{ type: "text", text: "{}" }] };
+    mockMcpServer({
+      handleTool: (name, args) => {
+        capturedArgs = args;
+        return textEnvelope({});
+      },
     });
     const bridge = new UnityBridge();
-    await bridge.modifyTransform("/Player", { position: { x: 1, y: 2, z: 3 } });
-    expect(capturedArgs).toMatchObject({ action: "modify", target: "/Player", position: { x: 1, y: 2, z: 3 } });
+    await bridge.modifyTransform("Player", { position: { x: 1, y: 2, z: 3 } });
+    expect(capturedArgs).toMatchObject({ action: "modify", target: "Player", position: { x: 1, y: 2, z: 3 } });
+  });
+
+  it("modifies a component via manage_components set_property, not manage_gameobject set_component_property", async () => {
+    let capturedTool: string | undefined;
+    let capturedArgs: any;
+    mockMcpServer({
+      handleTool: (name, args) => {
+        capturedTool = name;
+        capturedArgs = args;
+        return textEnvelope({});
+      },
+    });
+    const bridge = new UnityBridge();
+    await bridge.modifyComponent("Player", "Rigidbody", { mass: 5 });
+    expect(capturedTool).toBe("manage_components");
+    expect(capturedArgs).toMatchObject({
+      action: "set_property",
+      target: "Player",
+      component_type: "Rigidbody",
+      properties: { mass: 5 },
+    });
+  });
+
+  it("throws when a mutating call's envelope reports success: false, instead of silently no-op'ing", async () => {
+    mockMcpServer({ handleTool: () => textEnvelope(null, false, "Target GameObject not found") });
+    const bridge = new UnityBridge();
+    await expect(bridge.modifyObject("Ghost", { active: true })).rejects.toThrow(/Target GameObject not found/);
   });
 
   it("enters and exits play mode via manage_editor", async () => {
     const calls: string[] = [];
-    mockMcpResponse((body) => {
-      calls.push(body.params.arguments.action);
-      return { content: [{ type: "text", text: "{}" }] };
+    mockMcpServer({
+      handleTool: (name, args) => {
+        calls.push(args.action);
+        return textEnvelope(null);
+      },
     });
     const bridge = new UnityBridge();
     await bridge.enterPlayMode();
@@ -90,32 +241,39 @@ describe("UnityBridge", () => {
     expect(calls).toEqual(["play", "stop"]);
   });
 
-  it("captures a screenshot from image content", async () => {
-    mockMcpResponse(() => ({ content: [{ type: "image", text: "base64data" }] }));
+  it("captures a screenshot via manage_camera screenshot, reading base64 from the image block's data field", async () => {
+    let capturedTool: string | undefined;
+    let capturedArgs: any;
+    mockMcpServer({
+      handleTool: (name, args) => {
+        capturedTool = name;
+        capturedArgs = args;
+        return {
+          content: [
+            { type: "text", text: JSON.stringify({ success: true, data: { imageWidth: 640, imageHeight: 360 } }) },
+            { type: "image", data: "base64data" },
+          ],
+        };
+      },
+    });
     const bridge = new UnityBridge();
     const screenshot = await bridge.captureScreenshot();
-    expect(screenshot.base64Png).toBe("base64data");
+    expect(capturedTool).toBe("manage_camera");
+    expect(capturedArgs).toMatchObject({ action: "screenshot", include_image: true });
+    expect(screenshot).toEqual({ base64Png: "base64data", width: 640, height: 360 });
   });
 
   it("reads the console via read_console, unwrapping the real {data:[...]} envelope and mapping log types", async () => {
     let capturedArgs: any;
-    mockMcpResponse((body) => {
-      capturedArgs = body.params.arguments;
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              success: true,
-              data: [
-                { type: "Error", message: "NullReferenceException", stackTrace: "at Foo.Bar()" },
-                { type: "Warning", message: "deprecated API", stackTrace: null },
-                { type: "Log", message: "hello" },
-              ],
-            }),
-          },
-        ],
-      };
+    mockMcpServer({
+      handleTool: (name, args) => {
+        capturedArgs = args;
+        return textEnvelope([
+          { type: "Error", message: "NullReferenceException", stackTrace: "at Foo.Bar()" },
+          { type: "Warning", message: "deprecated API", stackTrace: null },
+          { type: "Log", message: "hello" },
+        ]);
+      },
     });
     const bridge = new UnityBridge();
     const messages = await bridge.readConsole();
@@ -128,35 +286,75 @@ describe("UnityBridge", () => {
     ]);
   });
 
+  it("retries on the server's own hint:\"retry\" signal, reproducing the real intermittent Unity-session hiccup, and succeeds once it clears", async () => {
+    // Reproduced live 2026-08-10: read_console/find_gameobjects/manage_gameobject all
+    // occasionally failed with success:false, hint:"retry" (~2 of 3 back-to-back live
+    // calls in one observed run) due to the Unity-side WebSocket bridge hiccuping.
+    let attempts = 0;
+    mockMcpServer({
+      handleTool: () => {
+        attempts += 1;
+        if (attempts < 3) return textEnvelope(null, false, "Unity plugin session disconnected while awaiting command_result", "retry");
+        return textEnvelope([]);
+      },
+    });
+    const bridge = new UnityBridge();
+    const messages = await bridge.readConsole();
+    expect(attempts).toBe(3);
+    expect(messages).toEqual([]);
+  });
+
+  it("does not retry a non-retryable failure (no hint:\"retry\") even after multiple calls, and surfaces it immediately", async () => {
+    let attempts = 0;
+    mockMcpServer({
+      handleTool: () => {
+        attempts += 1;
+        return textEnvelope(null, false, "GameObject not found");
+      },
+    });
+    const bridge = new UnityBridge();
+    await expect(bridge.readConsole()).rejects.toThrow(/GameObject not found/);
+    expect(attempts).toBe(1);
+  });
+
+  it("gives up after exhausting retries and surfaces the last real error", async () => {
+    let attempts = 0;
+    mockMcpServer({
+      handleTool: () => {
+        attempts += 1;
+        return textEnvelope(null, false, "Unity plugin session disconnected while awaiting command_result", "retry");
+      },
+    });
+    const bridge = new UnityBridge();
+    await expect(bridge.readConsole()).rejects.toThrow(/disconnected while awaiting command_result/);
+    expect(attempts).toBe(3);
+  });
+
+  it("readConsole throws a clear ProviderError (not a TypeError) on the real transient 'session not ready' failure shape", async () => {
+    // Reproduced live 2026-08-10 against a real Editor: read_console can genuinely come back
+    // with success:false and data:null (not []) when the Unity-side bridge session hiccups
+    // (e.g. "ping not answered"). The old code called `.map` straight on `data` and crashed.
+    mockMcpServer({
+      handleTool: () => textEnvelope(null, false, "Unity session not ready for 'read_console' (ping not answered); please retry"),
+    });
+    const bridge = new UnityBridge();
+    await expect(bridge.readConsole()).rejects.toThrow(/ping not answered/);
+  });
+
   it("buildProject() forces a real recompile via refresh_unity, not manage_editor, and reports success on a clean console", async () => {
     const calledTools: string[] = [];
     let refreshArgs: any;
-    globalThis.fetch = vi.fn(async (_url, init) => {
-      const body = JSON.parse((init as RequestInit).body as string);
-      if (body.method === "initialize") {
-        return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: {} }), {
-          status: 200,
-          headers: { "Mcp-Session-Id": SESSION_ID, "Content-Type": "application/json" },
-        });
-      }
-      if (body.method === "notifications/initialized") {
-        return new Response(null, { status: 202 });
-      }
-      calledTools.push(body.params.name);
-      let result: unknown;
-      if (body.params.name === "refresh_unity") {
-        refreshArgs = body.params.arguments;
-        result = { content: [{ type: "text", text: JSON.stringify({ refresh_triggered: true, compile_requested: true, resulting_state: "idle" }) }] };
-      } else if (body.params.name === "read_console") {
-        result = { content: [{ type: "text", text: JSON.stringify({ success: true, data: [] }) }] };
-      } else {
-        throw new Error(`unexpected tool call in test: ${body.params.name}`);
-      }
-      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    }) as unknown as typeof fetch;
+    mockMcpServer({
+      handleTool: (name, args) => {
+        calledTools.push(name);
+        if (name === "refresh_unity") {
+          refreshArgs = args;
+          return textEnvelope({ refresh_triggered: true, compile_requested: true, resulting_state: "idle" });
+        }
+        if (name === "read_console") return textEnvelope([]);
+        throw new Error(`unexpected tool call in test: ${name}`);
+      },
+    });
 
     const bridge = new UnityBridge();
     const result = await bridge.buildProject();
@@ -167,43 +365,28 @@ describe("UnityBridge", () => {
   });
 
   it("buildProject() reports failure with the real compiler error text when the console has errors after recompiling", async () => {
-    globalThis.fetch = vi.fn(async (_url, init) => {
-      const body = JSON.parse((init as RequestInit).body as string);
-      if (body.method === "initialize") {
-        return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: {} }), {
-          status: 200,
-          headers: { "Mcp-Session-Id": SESSION_ID, "Content-Type": "application/json" },
-        });
-      }
-      if (body.method === "notifications/initialized") {
-        return new Response(null, { status: 202 });
-      }
-      let result: unknown;
-      if (body.params.name === "refresh_unity") {
-        result = { content: [{ type: "text", text: JSON.stringify({ refresh_triggered: true, compile_requested: true, resulting_state: "idle" }) }] };
-      } else {
-        result = {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                success: true,
-                data: [{ type: "Error", message: "CS1002: ; expected", stackTrace: null }],
-              }),
-            },
-          ],
-        };
-      }
-      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    }) as unknown as typeof fetch;
+    mockMcpServer({
+      handleTool: (name) => {
+        if (name === "refresh_unity") return textEnvelope({ refresh_triggered: true, compile_requested: true, resulting_state: "idle" });
+        return textEnvelope([{ type: "Error", message: "CS1002: ; expected", stackTrace: null }]);
+      },
+    });
 
     const bridge = new UnityBridge();
     const result = await bridge.buildProject();
 
     expect(result).toEqual({ success: false, errors: ["CS1002: ; expected"] });
+  });
+
+  it("buildProject() surfaces a real refresh_unity failure instead of proceeding to read_console", async () => {
+    mockMcpServer({
+      handleTool: (name) => {
+        if (name === "refresh_unity") return textEnvelope(null, false, "Compilation is disabled while entering play mode");
+        throw new Error(`unexpected tool call in test: ${name}`);
+      },
+    });
+    const bridge = new UnityBridge();
+    await expect(bridge.buildProject()).rejects.toThrow(/Compilation is disabled/);
   });
 
   describe("runTests()", () => {

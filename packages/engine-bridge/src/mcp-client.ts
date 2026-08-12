@@ -9,6 +9,14 @@ export interface McpToolInfo {
 export interface McpContentBlock {
   type: string;
   text?: string;
+  /** Base64 payload for `type: "image"` blocks (confirmed live 2026-08-10 against mcp-for-unity's `manage_camera` screenshot tool — image blocks carry the payload in `data`, not `text`). */
+  data?: string;
+}
+
+export interface McpResourceContent {
+  uri: string;
+  mimeType?: string;
+  text?: string;
 }
 
 export interface McpToolCallResult {
@@ -69,6 +77,17 @@ export class McpHttpClient {
 
   async callTool(name: string, args: Record<string, unknown> = {}): Promise<McpToolCallResult> {
     return this.request<McpToolCallResult>("tools/call", { name, arguments: args });
+  }
+
+  /**
+   * Reads an MCP resource (e.g. `mcpforunity://scene/gameobject/{id}`) — a separate
+   * MCP capability from tools, confirmed live 2026-08-10: unity-mcp exposes GameObject
+   * detail/component data this way rather than through a `manage_gameobject` "get"
+   * action (that action doesn't exist in the real tool's action enum).
+   */
+  async readResource(uri: string): Promise<McpResourceContent[]> {
+    const result = await this.request<{ contents: McpResourceContent[] }>("resources/read", { uri });
+    return result.contents;
   }
 
   /** Opens the MCP session (idempotent — safe to call from multiple concurrent requests). */

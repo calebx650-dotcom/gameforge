@@ -255,11 +255,26 @@ describe("GameForge end-to-end smoke test", () => {
           return;
         }
         if (rpc.method === "tools/list") {
-          res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: { tools: [{ name: "capture_screenshot" }] } }));
+          res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: { tools: [{ name: "manage_camera" }] } }));
           return;
         }
-        if (rpc.method === "tools/call" && rpc.params.name === "capture_screenshot") {
-          res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: { content: [{ type: "image", text: "fakeScreenshotBase64" }] } }));
+        // Real unity-mcp has no "capture_screenshot" tool; the real capability is
+        // manage_camera's "screenshot" action, which returns a text envelope block
+        // plus a separate image block whose base64 payload is in `data`, not `text`
+        // (both confirmed live 2026-08-10 — see UNITY_BRIDGE.md).
+        if (rpc.method === "tools/call" && rpc.params.name === "manage_camera") {
+          res.end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: rpc.id,
+              result: {
+                content: [
+                  { type: "text", text: JSON.stringify({ success: true, data: { imageWidth: 640, imageHeight: 360 } }) },
+                  { type: "image", data: "fakeScreenshotBase64" },
+                ],
+              },
+            }),
+          );
           return;
         }
         res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, error: { message: "unhandled tool call in test" } }));
@@ -462,7 +477,17 @@ describe("GameForge end-to-end smoke test", () => {
             JSON.stringify({
               jsonrpc: "2.0",
               id: rpc.id,
-              result: { content: [{ type: "text", text: JSON.stringify({ refresh_triggered: true, compile_requested: true, resulting_state: "idle" }) }] },
+              result: {
+                content: [
+                  {
+                    type: "text",
+                    text: JSON.stringify({
+                      success: true,
+                      data: { refresh_triggered: true, compile_requested: true, resulting_state: "idle" },
+                    }),
+                  },
+                ],
+              },
             }),
           );
           return;

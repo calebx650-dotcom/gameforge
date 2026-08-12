@@ -44,7 +44,8 @@ export function startServer(port = PORT) {
 // `startServer()` was never called and the process just sat there watching files, never
 // listening on anything (no error, no log line — indistinguishable from a hang without
 // tracing it). `pathToFileURL` builds the same kind of URL Node itself used for
-// `import.meta.url`, so the comparison actually matches.
+// `import.meta.url`, so the comparison actually matches. (Independently found and fixed
+// the same way in an earlier uncommitted session, 2026-08-10.)
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
   startServer();

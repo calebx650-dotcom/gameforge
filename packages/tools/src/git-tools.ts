@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { realpath } from "node:fs/promises";
+import { resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import type { AgentMode } from "@gameforge/shared";
 import type { WorkspaceGuard } from "./workspace.js";
@@ -22,27 +23,35 @@ async function git(guard: WorkspaceGuard, args: string[]): Promise<string> {
  * (`git rev-parse --is-inside-work-tree`) answers a different question: it's true for ANY
  * directory under ANY ancestor `.git`, no matter how far up, so it can't distinguish "this
  * project is a real git repo" from "this project happens to sit inside someone else's real
- * git repo." Confirmed live 2026-08-11: on a machine where `os.tmpdir()` resolves under the
- * user's home directory, and that home directory is itself the working tree of a real,
- * unrelated personal project's git repo, every plain (non-git) scratch/test directory under
- * the temp dir was misreported as "yes, a git repo" — and `maybeCreateCheckpoint` /
- * `restoreCheckpoint` then ran real `git add`/`commit`/`reset --hard` against that ancestor
- * repo. `reset --hard` in particular resets the *entire* discovered work tree, not just the
- * project subdirectory, so this was a real path to destructively wiping out uncommitted
- * work in a repository GameForge was never told about, not just a misattributed commit.
- * Comparing the repo's real toplevel against guard.root (both realpath'd, the same way
- * `WorkspaceGuard.resolveReal` already has to for Windows 8.3 short-name aliasing) closes
- * that gap: a project that is a subdirectory of a larger repo is — correctly, if
- * conservatively — treated as "not a git repo" for GameForge's own checkpoint/restore
- * purposes, rather than risking those operations against a repo boundary the user never
- * pointed GameForge at.
+ * git repo." This was independently confirmed live twice: opening a real Unity project with
+ * no `.git` of its own (2026-08-10, only its parent user-home directory had one, for a
+ * wholly unrelated personal project) reported `isRepo: true`, and on a machine where
+ * `os.tmpdir()` resolves under that same kind of unrelated-repo home directory (2026-08-11),
+ * every plain (non-git) scratch/test directory under the temp dir was misreported the same
+ * way. Either way, `maybeCreateCheckpoint`/`restoreCheckpoint` then ran real
+ * `git add`/`commit`/`reset --hard` against that ancestor repo instead of the intended
+ * project. `reset --hard` in particular resets the *entire* discovered work tree, not just
+ * the project subdirectory — a real path to destructively wiping out uncommitted work in a
+ * repository GameForge was never told about, not just a misattributed commit.
+ *
+ * The real question is "is `guard.root` *itself* a repo root", answered by comparing it
+ * against `git rev-parse --show-toplevel`. That alone isn't a safe string comparison on
+ * Windows for two independent reasons, both confirmed live: git always prints forward-slash
+ * paths (even on Windows) while `guard.root` uses OS-native separators — the same class of
+ * naive-path-comparison bug fixed in apps/server's `isMain` check — and `os.tmpdir()` (so
+ * `guard.root` for a project under it) commonly comes back in the legacy 8.3 short-name form
+ * (`C:\Users\CALEBH~1\...`), while git canonicalizes and reports the long form
+ * (`C:/Users/Caleb haynes/...`) — the same directory, two different strings. `fs.realpath`
+ * resolves both the short-name aliasing and symlinks to the same canonical form on every
+ * platform, so it's used here instead of a bare `path.resolve` (kept only as the fallback
+ * for the rare case realpath itself throws, e.g. a path that no longer exists).
  */
 async function isGitRepo(guard: WorkspaceGuard): Promise<boolean> {
   try {
-    const toplevel = (await git(guard, ["rev-parse", "--show-toplevel"])).trim();
+    const toplevel = (await git(guard, ["rev-parse", "--show-toplevel"])).trim().split("/").join(sep);
     const [realToplevel, realRoot] = await Promise.all([
-      realpath(toplevel).catch(() => toplevel),
-      realpath(guard.root).catch(() => guard.root),
+      realpath(toplevel).catch(() => resolve(toplevel)),
+      realpath(guard.root).catch(() => resolve(guard.root)),
     ]);
     return normalizePathForComparison(realToplevel) === normalizePathForComparison(realRoot);
   } catch {
@@ -50,8 +59,10 @@ async function isGitRepo(guard: WorkspaceGuard): Promise<boolean> {
   }
 }
 
+/** Strips a trailing separator (git's --show-toplevel output never has one; a raw guard.root sometimes does) and, on Windows only, case-folds — NTFS is case-insensitive, but a POSIX filesystem is not, so unconditional lowercasing there could paper over two genuinely distinct directories. */
 function normalizePathForComparison(p: string): string {
-  return p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  const normalized = p.replace(/[\\/]+$/, "");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
 export interface GitStatusResult {

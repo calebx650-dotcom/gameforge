@@ -333,7 +333,7 @@ export function App() {
             </select>
             {engine !== "none" && (
               <input
-                placeholder={engine === "unity" ? "http://127.0.0.1:6400 (default)" : "ws://127.0.0.1:6401 (default)"}
+                placeholder={engine === "unity" ? "http://127.0.0.1:8080 (default)" : "ws://127.0.0.1:6401 (default)"}
                 value={engineUrl}
                 onChange={(e) => setEngineUrl(e.target.value)}
               />
