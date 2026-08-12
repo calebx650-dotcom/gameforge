@@ -9,6 +9,15 @@ const PROVIDERS = ["ollama", "openai", "openrouter", "anthropic", "gemini", "ope
 const MODES: AgentMode[] = ["ask", "assist", "build", "autonomous"];
 const ENGINES = ["none", "unity", "godot"] as const;
 
+// Ollama is the only provider with a meaningful default worth pre-filling (a local
+// server address the user will almost always want as-is). Every other provider's real
+// default lives in packages/llm/src/registry.ts (e.g. Gemini's real API host) and only
+// needs a baseUrl typed in for a custom/self-hosted endpoint, so the field should start
+// empty for them rather than carrying over whatever the previously selected provider had.
+const DEFAULT_BASE_URLS: Partial<Record<(typeof PROVIDERS)[number], string>> = {
+  ollama: "http://127.0.0.1:11434",
+};
+
 interface PendingApproval {
   requestId: string;
   toolCall: ToolCall;
@@ -33,6 +42,19 @@ export function App() {
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [keychainMessage, setKeychainMessage] = useState<string | null>(null);
   const keychainAvailable = isKeychainAvailable();
+
+  // Switching providers resets the Base URL field to that provider's own sensible
+  // default (see DEFAULT_BASE_URLS) instead of leaving whatever the previously
+  // selected provider's URL was sitting in the field. Confirmed live 2026-08-11:
+  // switching from ollama to gemini left "http://127.0.0.1:11434" in the field,
+  // which GeminiProvider then used as its baseUrl instead of the real Gemini API
+  // host, and "Refresh Models" 404'd with no indication why — the apiKey field
+  // already resets on provider switch (see the effect below); baseUrl silently
+  // didn't.
+  useEffect(() => {
+    setBaseUrl(DEFAULT_BASE_URLS[provider as (typeof PROVIDERS)[number]] ?? "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [provider]);
 
   // Switching providers loads whatever key was previously saved to the OS
   // keychain for that provider (native Tauri window only — a no-op in the
@@ -118,7 +140,15 @@ export function App() {
   async function handleRefreshModels() {
     setModelsError(null);
     try {
-      const list = await listModels({ provider, baseUrl, apiKey: apiKey || undefined });
+      // baseUrl must fall back to undefined (not ""), matching sendChat below — an
+      // empty string survives `?? defaultUrl` in every provider constructor (`??`
+      // only catches null/undefined), so an empty field silently sent a real
+      // request to a blank host instead of that provider's real default. Confirmed
+      // live 2026-08-11: after fixing the Base URL field to reset to "" instead of
+      // leaking Ollama's URL into Gemini (see the useEffect above), "Refresh Models"
+      // on Gemini failed with "Failed to parse URL from /v1beta/models" — the empty
+      // string reached fetch() as a bare relative path.
+      const list = await listModels({ provider, baseUrl: baseUrl || undefined, apiKey: apiKey || undefined });
       setModels(list);
       if (list.length && !model) setModel(list[0].id);
     } catch (err) {

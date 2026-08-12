@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { pathToFileURL } from "node:url";
 import express from "express";
 import cors from "cors";
 import { WebSocketServer } from "ws";
@@ -34,7 +35,17 @@ export function startServer(port = PORT) {
   return httpServer;
 }
 
-const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+// Naively comparing `import.meta.url` against `file://${process.argv[1]}` (the previous
+// approach) never matches on Windows: argv[1] uses backslashes and isn't percent-encoded
+// (`C:\Users\...\index.ts`), while import.meta.url is a real file:// URL with forward
+// slashes, a triple slash before the drive letter, and spaces percent-encoded
+// (`file:///C:/Users/...`) — confirmed live 2026-08-11: `npm run dev:server` started the
+// process and compiled cleanly with no error, but this check was always false, so
+// `startServer()` was never called and the process just sat there watching files, never
+// listening on anything (no error, no log line — indistinguishable from a hang without
+// tracing it). `pathToFileURL` builds the same kind of URL Node itself used for
+// `import.meta.url`, so the comparison actually matches.
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
   startServer();
 }

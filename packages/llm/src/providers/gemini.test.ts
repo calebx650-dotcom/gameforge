@@ -45,7 +45,11 @@ describe("GeminiProvider", () => {
     expect(result.usage).toEqual({ promptTokens: 5, completionTokens: 2, totalTokens: 7 });
   });
 
-  it("maps the assistant role to Gemini's 'model' role and tool results to a 'function' role turn", async () => {
+  it("maps the assistant role to Gemini's 'model' role and tool results to a 'user' role turn", async () => {
+    // Confirmed live 2026-08-11 against the real API: a functionResponse turn sent with
+    // role "function" 400s ("Role 'function' is not supported. Please use a valid role:
+    // SYSTEM, SYSTEM_1, USER, ASSISTANT, DEVELOPER, CONTEXT, USER_CONTEXT, MODEL, USER.").
+    // The real API wants functionResponse parts on a "user"-role turn instead.
     let capturedBody: any;
     globalThis.fetch = vi.fn(async (_url, init) => {
       capturedBody = JSON.parse((init as RequestInit).body as string);
@@ -71,9 +75,52 @@ describe("GeminiProvider", () => {
       parts: [{ functionCall: { name: "read_file", args: { path: "a.txt" } } }],
     });
     expect(capturedBody.contents[2]).toEqual({
-      role: "function",
+      role: "user",
       parts: [{ functionResponse: { name: "read_file", response: { content: "file contents" } } }],
     });
+  });
+
+  it("round-trips a functionCall's thoughtSignature into providerData and back onto the wire", async () => {
+    // Confirmed live 2026-08-11: a real generateContent response's functionCall part
+    // carries a sibling `thoughtSignature` string that must be echoed back verbatim on
+    // the matching outgoing functionCall part, or the follow-up turn 400s with "Function
+    // call is missing a thought_signature in functionCall parts."
+    const thoughtSignature = "EsoCCscCARFNMg9opaque-signature-blob";
+    globalThis.fetch = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                role: "model",
+                parts: [{ functionCall: { name: "list_directory", args: { path: "." } }, thoughtSignature }],
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    ) as unknown as typeof fetch;
+
+    const provider = new GeminiProvider({ apiKey: "k" });
+    const result = await provider.generate({ model: "gemini-flash-latest", messages: [{ role: "user", content: "hi" }] });
+    expect(result.toolCalls?.[0]?.providerData).toBe(thoughtSignature);
+
+    let capturedBody: any;
+    globalThis.fetch = vi.fn(async (_url, init) => {
+      capturedBody = JSON.parse((init as RequestInit).body as string);
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "done" }] } }] }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await provider.generate({
+      model: "gemini-flash-latest",
+      messages: [
+        { role: "user", content: "hi" },
+        result.message,
+        { role: "tool", toolCallId: result.toolCalls![0].id, name: "list_directory", content: "[]" },
+      ],
+    });
+    expect(capturedBody.contents[1].parts[0].thoughtSignature).toBe(thoughtSignature);
   });
 
   it("maps image content parts to Gemini's inlineData shape", async () => {

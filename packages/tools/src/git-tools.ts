@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { realpath } from "node:fs/promises";
 import { promisify } from "node:util";
 import type { AgentMode } from "@gameforge/shared";
 import type { WorkspaceGuard } from "./workspace.js";
@@ -15,13 +16,42 @@ async function git(guard: WorkspaceGuard, args: string[]): Promise<string> {
   }
 }
 
+/**
+ * True only when `guard.root` is itself the top of a git work tree — not merely nested
+ * somewhere inside an unrelated ancestor repo. The previous check
+ * (`git rev-parse --is-inside-work-tree`) answers a different question: it's true for ANY
+ * directory under ANY ancestor `.git`, no matter how far up, so it can't distinguish "this
+ * project is a real git repo" from "this project happens to sit inside someone else's real
+ * git repo." Confirmed live 2026-08-11: on a machine where `os.tmpdir()` resolves under the
+ * user's home directory, and that home directory is itself the working tree of a real,
+ * unrelated personal project's git repo, every plain (non-git) scratch/test directory under
+ * the temp dir was misreported as "yes, a git repo" — and `maybeCreateCheckpoint` /
+ * `restoreCheckpoint` then ran real `git add`/`commit`/`reset --hard` against that ancestor
+ * repo. `reset --hard` in particular resets the *entire* discovered work tree, not just the
+ * project subdirectory, so this was a real path to destructively wiping out uncommitted
+ * work in a repository GameForge was never told about, not just a misattributed commit.
+ * Comparing the repo's real toplevel against guard.root (both realpath'd, the same way
+ * `WorkspaceGuard.resolveReal` already has to for Windows 8.3 short-name aliasing) closes
+ * that gap: a project that is a subdirectory of a larger repo is — correctly, if
+ * conservatively — treated as "not a git repo" for GameForge's own checkpoint/restore
+ * purposes, rather than risking those operations against a repo boundary the user never
+ * pointed GameForge at.
+ */
 async function isGitRepo(guard: WorkspaceGuard): Promise<boolean> {
   try {
-    await git(guard, ["rev-parse", "--is-inside-work-tree"]);
-    return true;
+    const toplevel = (await git(guard, ["rev-parse", "--show-toplevel"])).trim();
+    const [realToplevel, realRoot] = await Promise.all([
+      realpath(toplevel).catch(() => toplevel),
+      realpath(guard.root).catch(() => guard.root),
+    ]);
+    return normalizePathForComparison(realToplevel) === normalizePathForComparison(realRoot);
   } catch {
     return false;
   }
+}
+
+function normalizePathForComparison(p: string): string {
+  return p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
 export interface GitStatusResult {

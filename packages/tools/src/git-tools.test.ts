@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
@@ -31,6 +31,42 @@ describe("gitStatusTool", () => {
     const root = await mkdtemp(join(tmpdir(), "gf-noRepo-"));
     const status = await gitStatusTool(new WorkspaceGuard(root));
     expect(status.isRepo).toBe(false);
+  });
+
+  it("reports isRepo: false for a plain directory nested inside an unrelated ancestor git repo", async () => {
+    // Confirmed live 2026-08-11: on a machine where os.tmpdir() resolves under a directory
+    // that is itself a real git repo the project has nothing to do with (this can happen
+    // for real, not just in a rigged test — a user's home directory can legitimately be a
+    // git-tracked dotfiles/project repo), the old `git rev-parse --is-inside-work-tree`
+    // check reported true for every plain scratch directory underneath it, and
+    // maybeCreateCheckpoint/restoreCheckpoint would then run real git commands against
+    // that ancestor repo — `reset --hard` in particular would hard-reset its *entire*
+    // working tree. This reproduces that exact shape: a real git repo as the outer
+    // directory, and a plain (never git-init'd) subdirectory as the "project" GameForge
+    // was actually pointed at.
+    const outerRoot = await mkdtemp(join(tmpdir(), "gf-ancestorRepo-"));
+    await execFileAsync("git", ["init"], { cwd: outerRoot });
+    await execFileAsync("git", ["config", "user.email", "test@example.com"], { cwd: outerRoot });
+    await execFileAsync("git", ["config", "user.name", "Test"], { cwd: outerRoot });
+    await writeFile(join(outerRoot, "unrelated-ancestor-file.txt"), "belongs to the outer repo\n");
+    await execFileAsync("git", ["add", "-A"], { cwd: outerRoot });
+    await execFileAsync("git", ["commit", "-m", "unrelated ancestor repo's own history"], { cwd: outerRoot });
+
+    const innerProjectRoot = join(outerRoot, "nested-project-never-git-init");
+    await mkdir(innerProjectRoot);
+
+    const status = await gitStatusTool(new WorkspaceGuard(innerProjectRoot));
+    expect(status.isRepo).toBe(false);
+
+    const checkpoint = await maybeCreateCheckpoint(new WorkspaceGuard(innerProjectRoot), "autonomous", "should not touch the ancestor repo");
+    expect(checkpoint.created).toBe(false);
+    expect(checkpoint.reason).toMatch(/not a git repository/);
+
+    // And the outer repo's own history must be completely untouched.
+    const outerGuard = new WorkspaceGuard(outerRoot);
+    const outerLog = await gitLogTool(outerGuard, 10);
+    expect(outerLog).toHaveLength(1);
+    expect(outerLog[0].message).toBe("unrelated ancestor repo's own history");
   });
 
   it("reports untracked, unstaged, and staged files distinctly", async () => {
