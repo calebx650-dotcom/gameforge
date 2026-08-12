@@ -23,6 +23,9 @@ async function makeRepo(): Promise<WorkspaceGuard> {
   await execFileAsync("git", ["init"], { cwd: root });
   await execFileAsync("git", ["config", "user.email", "test@example.com"], { cwd: root });
   await execFileAsync("git", ["config", "user.name", "Test"], { cwd: root });
+  // Prevent the host's global core.autocrlf=true (common on Windows) from rewriting
+  // LF fixtures to CRLF on checkout, which would break exact-content assertions below.
+  await execFileAsync("git", ["config", "core.autocrlf", "false"], { cwd: root });
   return new WorkspaceGuard(root);
 }
 

@@ -52,11 +52,27 @@ export async function runCommandTool(
     let stderr = "";
     let timedOut = false;
 
-    // Windows has no POSIX process groups; `-pid` there just fails, so fall
-    // back to killing the immediate child only (this codebase's real testing
-    // is Linux-only — see ROADMAP.md/PROVIDERS.md for that caveat generally).
+    // Windows has no POSIX process groups, so `-pid` isn't available — but
+    // `shell: true` there spawns cmd.exe as the immediate child, and cmd.exe
+    // execs the real command as its *own* child rather than replacing itself.
+    // Killing only cmd.exe leaves that grandchild alive, still holding the
+    // inherited stdout/stderr handles open, so `close` never fires and the
+    // call hangs past its own timeout — the same failure mode as the POSIX
+    // case above. `taskkill /t` kills the whole tree rooted at cmd.exe's pid.
+    // Confirmed live on Windows: `child.kill()` alone leaves the grandchild
+    // running and `close` never fires; `taskkill /t /f` fixes it.
     const killTree = () => {
-      if (process.platform !== "win32" && child.pid) {
+      if (process.platform === "win32") {
+        if (child.pid) {
+          spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"]).on("error", () => {
+            child.kill("SIGKILL");
+          });
+        } else {
+          child.kill("SIGKILL");
+        }
+        return;
+      }
+      if (child.pid) {
         try {
           process.kill(-child.pid, "SIGKILL");
           return;
